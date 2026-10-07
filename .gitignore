@@ -1,0 +1,27 @@
+# Agent and planning folders never enter this public repository
+.planning/
+.claude/
+.agents/
+.codex/
+.cursor/
+.opencode/
+.zcode/
+.idea/
+.vscode/
+.mcp.json
+
+# Environment files
+.env
+.env.*
+!.env.example
+.DS_Store
+
+# Java
+target/
+*.class
+.gradle/
+build/
+*.iml
+.classpath
+.project
+.settings/
