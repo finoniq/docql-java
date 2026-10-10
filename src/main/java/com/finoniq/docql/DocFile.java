@@ -1,5 +1,7 @@
 package com.finoniq.docql;
 
+import java.io.InputStream;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Objects;
 
@@ -37,6 +39,35 @@ public final class DocFile {
         Objects.requireNonNull(data, "data");
         Objects.requireNonNull(filename, "filename");
         return new DocFile(Kind.BYTES, Arrays.copyOf(data, data.length), filename);
+    }
+
+    /**
+     * A document from a file-system path. Placeholder: the real factory
+     * (basename default name, size length, {@code BodyPublishers.ofFile}
+     * body) is implemented in the feat commit.
+     *
+     * @param path the document file; must not be null
+     * @return the document input
+     */
+    public static DocFile path(Path path) {
+        Objects.requireNonNull(path, "path");
+        throw new UnsupportedOperationException("not implemented in this build");
+    }
+
+    /**
+     * A document from a caller-owned stream of known length. Placeholder:
+     * the real factory (bounded non-closing view, exact-length concat body)
+     * is implemented in the feat commit.
+     *
+     * @param in the document bytes; must not be null
+     * @param length the exact number of bytes to send; must not be negative
+     * @param filename the name of the file part; must not be null
+     * @return the document input
+     */
+    public static DocFile stream(InputStream in, long length, String filename) {
+        Objects.requireNonNull(in, "in");
+        Objects.requireNonNull(filename, "filename");
+        throw new UnsupportedOperationException("not implemented in this build");
     }
 
     /** Returns which factory built this input. */

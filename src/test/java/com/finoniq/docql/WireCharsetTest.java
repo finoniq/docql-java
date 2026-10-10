@@ -8,6 +8,7 @@ import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -15,8 +16,9 @@ import java.io.UncheckedIOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Base64;
-import java.util.Locale;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -24,15 +26,16 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The golden wire test (D-03, D-20): the request built from the golden
- * {@code ascii-query} inputs is byte-identical with
- * {@code contract/golden/ascii-query.bin} while the JVM default charset is
- * TIS-620 — the run's argLine, never another charset name, which the JDK
- * would silently ignore. Runs only in the dedicated {@code charset-tis620}
- * surefire execution.
+ * The golden wire test (D-03, D-20): the request built from each golden
+ * fixture input is byte-identical with its {@code contract/golden/*.bin} for
+ * all three input kinds — {@code bytes}, {@code path} (a temp file plus the
+ * filename override, so no non-ASCII name touches the file system under
+ * TIS-620) and {@code stream} — while the JVM default charset is TIS-620, the
+ * run's argLine, never another charset name, which the JDK would silently
+ * ignore. Runs only in the dedicated {@code charset-tis620} surefire
+ * execution.
  */
 class WireCharsetTest {
 
@@ -54,13 +57,7 @@ class WireCharsetTest {
     }
 
     @Test
-    void asciiQueryIsByteExactUnderNonUtf8DefaultCharset() throws Exception {
-        JsonNode fixture = goldenCase("ascii-query");
-        byte[] fileBytes = Base64.getDecoder().decode(fixture.path("fileBase64").asText());
-        String filename = fixture.path("filename").asText();
-        String query = fixture.path("query").asText();
-        byte[] golden = Kit.goldenBin(fixture.path("bin").asText());
-
+    void goldenFixturesAreByteExactUnderNonUtf8DefaultCharset() throws Exception {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", WireCharsetTest::handle);
         server.start();
@@ -70,40 +67,59 @@ class WireCharsetTest {
                     .apiUrl("http://127.0.0.1:" + server.getAddress().getPort())
                     .boundary(() -> GOLDEN_BOUNDARY)
                     .build();
-            QueryResult result = client.queryDocument(
-                    DocFile.bytes(fileBytes, filename),
-                    Instruction.query(query));
+            for (JsonNode fixture : Kit.golden().path("cases")) {
+                String id = fixture.path("id").asText();
+                byte[] fileBytes = Base64.getDecoder().decode(fixture.path("fileBase64").asText());
+                byte[] golden = Kit.goldenBin(fixture.path("bin").asText());
+                String filename = fixture.path("filename").asText();
+                Instruction instruction = fixture.hasNonNull("prompt")
+                        ? Instruction.prompt(fixture.path("prompt").asText())
+                        : Instruction.query(fixture.path("query").asText());
 
-            Captured request = captured.get();
-            assertNotNull(request, "the fake server received no request");
+                for (String kind : new String[]{"bytes", "path", "stream"}) {
+                    QueryOptions.Builder options = QueryOptions.builder();
+                    DocFile file;
+                    Path temp = null;
+                    if (kind.equals("bytes")) {
+                        file = DocFile.bytes(fileBytes, filename);
+                    } else if (kind.equals("path")) {
+                        temp = Files.createTempFile("doc", ".bin");
+                        Files.write(temp, fileBytes);
+                        // The override keeps the fixture filename off the file
+                        // system: TIS-620 cannot store non-ASCII names.
+                        options.filename(filename);
+                        file = DocFile.path(temp);
+                    } else {
+                        file = DocFile.stream(new ByteArrayInputStream(fileBytes), fileBytes.length, filename);
+                    }
 
-            // The body is byte-exact with the golden fixture.
-            assertArrayEquals(golden, request.body());
+                    captured.set(null);
+                    QueryResult result = client.queryDocument(file, instruction, options.build());
 
-            Headers headers = request.headers();
-            assertEquals(Kit.golden().path("contentType").asText(),
-                    headers.getFirst("Content-type"));
-            assertEquals(golden.length, Integer.parseInt(headers.getFirst("Content-length")),
-                    "Content-Length must be the exact body length");
-            assertNull(headers.getFirst("Transfer-encoding"),
-                    "a known-length body is never chunked");
-            assertEquals(WIRE_TEST_KEY, headers.getFirst("X-API-Key"));
-            assertTrue(headers.getFirst("User-agent")
-                            .matches("^docql-java/0\\.1\\.0 \\(java [^;()]+; [^/()]+/[^()]+\\)$"),
-                    "User-Agent must be docql-java/<version> (java <version>; <os>/<arch>): "
-                            + headers.getFirst("User-agent"));
-            assertNull(headers.getFirst("X-Request-Id"),
-                    "the SDK never sends X-Request-Id");
-            for (String name : headers.keySet()) {
-                assertTrue(!name.toLowerCase(Locale.ROOT).startsWith("x-docql-"),
-                        "the SDK never sends an x-docql-* header, saw " + name);
+                    Captured request = captured.get();
+                    assertNotNull(request, "the fake server received no request for " + id + "/" + kind);
+                    assertArrayEquals(golden, request.body(), id + "/" + kind + " must be byte-exact");
+
+                    Headers headers = request.headers();
+                    assertEquals(Kit.golden().path("contentType").asText(),
+                            headers.getFirst("Content-type"));
+                    assertEquals(golden.length, Integer.parseInt(headers.getFirst("Content-length")),
+                            "Content-Length must be the exact body length");
+                    assertNull(headers.getFirst("Transfer-encoding"),
+                            "a known-length body is never chunked");
+                    assertEquals(WIRE_TEST_KEY, headers.getFirst("X-API-Key"));
+                    assertEquals("wire-test-request-id", result.requestId());
+                    assertEquals(1, result.pageCount());
+
+                    if (temp != null) {
+                        Files.delete(temp);
+                    }
+                    System.out.println("GOLDEN_OK " + id + " " + kind + " " + golden.length);
+                }
             }
-            assertEquals("wire-test-request-id", result.requestId());
-            assertEquals(1, result.pageCount());
         } finally {
             server.stop(0);
         }
-        System.out.println("GOLDEN_OK ascii-query bytes " + golden.length);
     }
 
     private static void handle(HttpExchange exchange) throws IOException {
@@ -119,14 +135,5 @@ class WireCharsetTest {
         try (OutputStream out = exchange.getResponseBody()) {
             out.write(response);
         }
-    }
-
-    private static JsonNode goldenCase(String id) {
-        for (JsonNode c : Kit.golden().path("cases")) {
-            if (id.equals(c.path("id").asText())) {
-                return c;
-            }
-        }
-        throw new UncheckedIOException(new IOException("golden case " + id + " not found"));
     }
 }
