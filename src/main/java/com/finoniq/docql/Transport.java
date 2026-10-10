@@ -31,6 +31,14 @@ final class Transport {
         if (t instanceof DocQLException || t instanceof DocQLConnectionException) {
             return (RuntimeException) t;
         }
+        // A caller stream that ended before its declared length: surface the
+        // SDK's own message, never the JDK's "Too few bytes" text (D-03).
+        for (Throwable cause = t; cause != null; cause = cause.getCause()) {
+            if (cause instanceof ShortStreamException) {
+                return new DocQLConnectionException(
+                        Decoder.scrub(cause.getMessage(), key), t);
+            }
+        }
         String hint = fileLength > DocQL.MAX_UPLOAD_BYTES
                 ? " (the upload is " + fileLength + " bytes; the API rejects files over 25 MiB)"
                 : "";

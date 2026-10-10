@@ -78,6 +78,9 @@ class WireCharsetTest {
 
                 for (String kind : new String[]{"bytes", "path", "stream"}) {
                     QueryOptions.Builder options = QueryOptions.builder();
+                    if (fixture.path("mode").asText(null) != null) {
+                        options.mode(Mode.of(fixture.path("mode").asText()));
+                    }
                     DocFile file;
                     Path temp = null;
                     if (kind.equals("bytes")) {

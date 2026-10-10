@@ -46,11 +46,11 @@ class InputTest {
         return DocQL.builder().env(name -> null).apiKey(KEY).apiUrl(server.url()).build();
     }
 
-    /** The raw file-part bytes of a captured request: between the part headers and the closing boundary. */
+    /** The raw file-part bytes of a captured request: between the part headers and the epilogue. */
     private static byte[] filePart(FakeServer.CapturedRequest request) {
         String wire = new String(request.body(), StandardCharsets.UTF_8);
         int start = wire.indexOf("\r\n\r\n") + 4;
-        int end = wire.lastIndexOf("\r\n--" + request.boundary());
+        int end = wire.indexOf("\r\n--" + request.boundary(), start);
         return Arrays.copyOfRange(request.body(), start, end);
     }
 

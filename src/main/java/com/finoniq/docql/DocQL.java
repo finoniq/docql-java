@@ -1,14 +1,20 @@
 package com.finoniq.docql;
 
+import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpHeaders;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -104,9 +110,46 @@ public final class DocQL {
         Objects.requireNonNull(instruction, "instruction");
         Objects.requireNonNull(options, "options");
 
-        String partName = options.filename() != null ? options.filename() : file.name();
+        // Strict filename rule (D-02): override verbatim, else the path
+        // basename (null for a root path), else the factory name; empty is
+        // rejected before any I/O.
+        String partName;
+        if (options.filename() != null) {
+            partName = options.filename();
+        } else if (file.kind() == DocFile.Kind.PATH) {
+            Path fileName = file.path().getFileName();
+            partName = fileName == null ? "" : fileName.toString();
+        } else {
+            partName = file.name();
+        }
         if (partName.isEmpty()) {
             throw new IllegalArgumentException("missing filename: this file input needs a filename");
+        }
+
+        // A path input must be a regular file, checked before any byte is
+        // sent: ofFile alone would happily upload a directory's inode size.
+        if (file.kind() == DocFile.Kind.PATH && !Files.isRegularFile(file.path())) {
+            if (!Files.exists(file.path())) {
+                throw new UncheckedIOException(new NoSuchFileException(file.path().toString()));
+            }
+            throw new UncheckedIOException(new IOException("not a regular file: " + file.path()));
+        }
+
+        long fileLength;
+        switch (file.kind()) {
+            case BYTES:
+                fileLength = file.data().length;
+                break;
+            case PATH:
+                try {
+                    fileLength = Files.size(file.path());
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+                break;
+            default:
+                fileLength = file.length();
+                break;
         }
 
         byte[] bodyJson = Multipart.bodyJson(instruction, options.mode());
@@ -125,7 +168,7 @@ public final class DocQL {
                 .header("User-Agent", userAgent())
                 .POST(HttpRequest.BodyPublishers.concat(
                         HttpRequest.BodyPublishers.ofByteArray(preamble),
-                        HttpRequest.BodyPublishers.ofByteArray(file.data()),
+                        filePublisher(file),
                         HttpRequest.BodyPublishers.ofByteArray(epilogue)))
                 .build();
 
@@ -136,7 +179,7 @@ public final class DocQL {
             Thread.currentThread().interrupt();
             throw new DocQLConnectionException(Decoder.scrub("interrupted", apiKey), e);
         } catch (IOException e) {
-            throw Transport.mapFailure(e, file.data().length, apiKey, apiUrl, timeout);
+            throw Transport.mapFailure(e, fileLength, apiKey, apiUrl, timeout);
         }
 
         int status = response.statusCode();
@@ -152,6 +195,37 @@ public final class DocQL {
         // Every other status decodes as an error, 3xx included (D-09): the
         // key never leaves the configured host on a redirect.
         throw Decoder.decodeError(status, response.headers(), body, apiKey);
+    }
+
+    /**
+     * Picks the file publisher per input kind (D-03): the path streams from
+     * disk via {@code ofFile}, the bytes from memory, and a known-length
+     * stream through a bounded non-closing view served once — the zero-length
+     * stream becomes {@code noBody()}, because {@code fromPublisher(p, 0)}
+     * throws. Known-length parts inside {@code BodyPublishers.concat} keep
+     * the body an exact {@code Content-Length}, never chunked.
+     */
+    private static HttpRequest.BodyPublisher filePublisher(DocFile file) {
+        switch (file.kind()) {
+            case BYTES:
+                return HttpRequest.BodyPublishers.ofByteArray(file.data());
+            case PATH:
+                try {
+                    return HttpRequest.BodyPublishers.ofFile(file.path());
+                } catch (FileNotFoundException e) {
+                    throw new UncheckedIOException(e);
+                }
+            default:
+                if (file.length() == 0) {
+                    return HttpRequest.BodyPublishers.noBody();
+                }
+                AtomicBoolean served = new AtomicBoolean();
+                return HttpRequest.BodyPublishers.fromPublisher(
+                        HttpRequest.BodyPublishers.ofInputStream(() -> served.compareAndSet(false, true)
+                                ? new BoundedInputStream(file.stream(), file.length())
+                                : null),
+                        file.length());
+        }
     }
 
     /** The User-Agent of every request (D-13). */
