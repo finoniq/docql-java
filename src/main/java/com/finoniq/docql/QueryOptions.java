@@ -17,7 +17,11 @@ public final class QueryOptions {
         this.filename = builder.filename;
     }
 
-    /** Returns a builder for the options. */
+    /**
+     * Returns a builder for the options.
+     *
+     * @return a new builder
+     */
     public static Builder builder() {
         return new Builder();
     }
@@ -64,7 +68,11 @@ public final class QueryOptions {
             return this;
         }
 
-        /** Builds the immutable options. */
+        /**
+         * Builds the immutable options.
+         *
+         * @return the built options
+         */
         public QueryOptions build() {
             return new QueryOptions(this);
         }

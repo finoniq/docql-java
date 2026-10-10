@@ -78,7 +78,11 @@ public final class DocQL {
         this.boundarySupplier = boundarySupplier;
     }
 
-    /** Returns a builder for a client. */
+    /**
+     * Returns a builder for a client.
+     *
+     * @return a new builder
+     */
     public static Builder builder() {
         return new Builder();
     }
@@ -88,6 +92,9 @@ public final class DocQL {
      * result, with default options ({@code params.mode} omitted, the
      * DocFile's own name).
      *
+     * @param file the document to extract from
+     * @param instruction what to extract
+     * @return the extraction result
      * @throws NullPointerException if file, instruction or (in the overload)
      *         options is null
      * @throws IllegalArgumentException if the effective file-part name would
@@ -105,6 +112,10 @@ public final class DocQL {
      * extraction result. Nothing here retries: calls are paid. Every
      * client-side check happens before a byte is sent.
      *
+     * @param file the document to extract from
+     * @param instruction what to extract
+     * @param options per-call options
+     * @return the extraction result
      * @throws NullPointerException if file, instruction or options is null
      * @throws IllegalArgumentException if the effective file-part name would
      *         be empty
@@ -140,10 +151,16 @@ public final class DocQL {
      * the same exception the synchronous call would throw — a
      * {@link DocQLException}, a {@link DocQLConnectionException} or a
      * {@link DocQLTimeoutException} — surfacing as the cause of
-     * {@link ExecutionException} from {@link CompletableFuture#get() get()}
-     * and of {@link CompletionException} from
+     * {@link java.util.concurrent.ExecutionException} from
+     * {@link CompletableFuture#get() get()} and of
+     * {@link java.util.concurrent.CompletionException} from
      * {@link CompletableFuture#join() join()}.
      *
+     * @param file the document to extract from
+     * @param instruction what to extract
+     * @return a future completing with the extraction result, or
+     *         exceptionally with the same exceptions the synchronous call
+     *         throws
      * @throws NullPointerException if file or instruction is null
      */
     public CompletableFuture<QueryResult> queryDocumentAsync(DocFile file, Instruction instruction) {
@@ -162,6 +179,12 @@ public final class DocQL {
      * class the synchronous call would throw. Cancelling the returned future
      * cancels the underlying exchange; the client stays usable.
      *
+     * @param file the document to extract from
+     * @param instruction what to extract
+     * @param options per-call options
+     * @return a future completing with the extraction result, or
+     *         exceptionally with the same exceptions the synchronous call
+     *         throws
      * @throws NullPointerException if file, instruction or options is null
      */
     public CompletableFuture<QueryResult> queryDocumentAsync(DocFile file, Instruction instruction,
@@ -465,6 +488,10 @@ public final class DocQL {
          * {@code DOCQL_API_URL}; a whitespace-only value counts as unset),
          * then the production default for the URL. Fails fast before any
          * network contact when no usable key or URL can be resolved (D-01).
+         *
+         * @return the immutable client
+         * @throws IllegalArgumentException when no usable key or URL can be
+         *         resolved, or an injected client follows redirects
          */
         public DocQL build() {
             return new DocQL(resolveKey(), resolveUrl(), resolveTimeout(),

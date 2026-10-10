@@ -18,12 +18,19 @@ public class DocQLException extends RuntimeException {
 
     private static final long serialVersionUID = 1L;
 
+    /** The HTTP status code of the response. */
     private final int status;
+    /** The envelope reason; null without a DocQL envelope. */
     private final String reason;
+    /** The request id from the metadata, else {@code x-request-id}; else null. */
     private final String requestId;
+    /** The parsed {@code Retry-After}; null when absent or unparsable. */
     private final Duration retryAfter;
+    /** Whether the call may be retried: true only for 429 and 503. */
     private final boolean retryable;
+    /** The envelope {@code error_info}, scrubbed of the key; null when absent. */
     private final String serverMessage;
+    /** The response body, valid UTF-8, scrubbed, capped at 2048 characters. */
     private final String body;
 
     DocQLException(int status, String reason, String requestId, Duration retryAfter,
@@ -38,7 +45,11 @@ public class DocQLException extends RuntimeException {
         this.body = body;
     }
 
-    /** Returns the HTTP status code of the response. */
+    /**
+     * Returns the HTTP status code of the response.
+     *
+     * @return the HTTP status code
+     */
     public int status() {
         return status;
     }
@@ -46,6 +57,8 @@ public class DocQLException extends RuntimeException {
     /**
      * Returns the envelope reason, e.g. {@code "invalid_api_key"}; null when
      * the response carried no DocQL envelope.
+     *
+     * @return the envelope reason, or null
      */
     public String reason() {
         return reason;
@@ -54,6 +67,8 @@ public class DocQLException extends RuntimeException {
     /**
      * Returns the request id from the envelope metadata, else the
      * {@code x-request-id} response header; null when neither is present.
+     *
+     * @return the request id, or null
      */
     public String requestId() {
         return requestId;
@@ -62,12 +77,18 @@ public class DocQLException extends RuntimeException {
     /**
      * Returns the parsed {@code Retry-After} header in whole seconds; null
      * when the header is absent or unparsable (D-21).
+     *
+     * @return the retry-after duration, or null
      */
     public Duration retryAfter() {
         return retryAfter;
     }
 
-    /** Returns whether the call may be retried: true only for 429 and 503. */
+    /**
+     * Returns whether the call may be retried: true only for 429 and 503.
+     *
+     * @return true only for 429 and 503
+     */
     public boolean retryable() {
         return retryable;
     }
@@ -75,6 +96,8 @@ public class DocQLException extends RuntimeException {
     /**
      * Returns {@code error_info} from the envelope, scrubbed of the API key;
      * null when absent.
+     *
+     * @return the server message, or null
      */
     public String serverMessage() {
         return serverMessage;
@@ -83,6 +106,8 @@ public class DocQLException extends RuntimeException {
     /**
      * Returns the response body, made valid UTF-8, scrubbed of the API key
      * and truncated to 2048 characters.
+     *
+     * @return the scrubbed, truncated response body
      */
     public String body() {
         return body;

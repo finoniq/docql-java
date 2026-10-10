@@ -40,7 +40,11 @@ public final class Mode {
         return new Mode(value);
     }
 
-    /** Returns the wire value, e.g. {@code "fast"}. */
+    /**
+     * Returns the wire value, e.g. {@code "fast"}.
+     *
+     * @return the wire value
+     */
     public String value() {
         return value;
     }

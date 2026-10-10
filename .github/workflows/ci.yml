@@ -1,0 +1,89 @@
+# Continuous integration for the docql Java SDK (JAVA-06, SC4): the README
+# quickstart equality check, the release-profile bundle build (sources jar,
+# javadoc jar with doclint=all and failOnWarnings, jar shape — bytecode major
+# 61 and Automatic-Module-Name: com.finoniq.docql) on the newest JDK, and the
+# unit suite (surefire plus the TIS-620 default-charset golden-wire proof,
+# D-20) on every supported toolchain 17/21/25. The contract suite against the
+# pinned stub lives in contract.yml. This workflow is reusable (workflow_call)
+# so release.yml runs the same checks on a tag. Maven is always invoked through
+# ./mvnw — the runner image ships its own Maven 3.10.0 and the wrapper pins
+# 3.9.16 (D-14).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6  # v6.0.1
+        with:
+          distribution: temurin
+          java-version: 25
+          cache: maven
+      - name: README quickstart matches examples/Quickstart.java
+        run: scripts/check-quickstart.sh
+      - name: release-profile build (sources jar, javadoc jar with doclint)
+        run: ./mvnw -B -ntp -P release -DskipTests package
+      - name: jar shape (major 61, Automatic-Module-Name, sources + javadoc jars)
+        run: |
+          set -euo pipefail
+          test -s target/docql-0.1.0-sources.jar
+          test -s target/docql-0.1.0-javadoc.jar
+          python3 -c "import zipfile; z = zipfile.ZipFile('target/docql-0.1.0.jar'); assert 'Automatic-Module-Name: com.finoniq.docql' in z.read('META-INF/MANIFEST.MF').decode(), 'the main jar manifest must carry Automatic-Module-Name: com.finoniq.docql'; assert z.read('com/finoniq/docql/DocQL.class')[6:8] == bytes([0, 61]), 'DocQL.class must be bytecode major version 61 (--release 17)'"
+          echo "jar shape ok: sources + javadoc jars present, DocQL.class major 61, Automatic-Module-Name: com.finoniq.docql"
+
+  unit:
+    name: unit (${{ matrix.java }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        java: [17, 21, 25]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6  # v6.0.1
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+          cache: maven
+      - name: the JDK under test matches the matrix cell
+        env:
+          CELL: ${{ matrix.java }}
+        run: |
+          set -euo pipefail
+          actual=$(java -XshowSettings:properties -version 2>&1 | awk '/^    java.specification.version = / {print $3}')
+          if [ "$actual" != "$CELL" ]; then
+            echo "expected java.specification.version $CELL, saw '$actual'" >&2
+            exit 1
+          fi
+          echo "cell java $CELL confirmed"
+      - name: unit tests with the TIS-620 charset proof (ITs skipped)
+        run: |
+          set -euo pipefail
+          ./mvnw -B -ntp verify -DskipITs | tee "$RUNNER_TEMP/unit.log"
+          if ! grep -qx 'DEFAULT_CHARSET=TIS-620' "$RUNNER_TEMP/unit.log"; then
+            echo "the TIS-620 default-charset proof line is missing (D-20)" >&2
+            exit 1
+          fi
+          golden=$(grep -cE '^GOLDEN_OK ' "$RUNNER_TEMP/unit.log")
+          if [ "$golden" -ne 15 ]; then
+            echo "expected 15 GOLDEN_OK lines (5 golden fixtures x 3 input kinds), saw $golden" >&2
+            exit 1
+          fi
+          echo "unit ok: DEFAULT_CHARSET=TIS-620, 15/15 GOLDEN_OK"
