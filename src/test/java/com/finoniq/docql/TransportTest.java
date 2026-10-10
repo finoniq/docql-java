@@ -299,7 +299,7 @@ class TransportTest {
             DocQLException e = assertThrows(DocQLException.class, () -> send(c));
             assertEquals(502, e.status());
             assertTrue(e.body().length() <= 2048, "body() kept " + e.body().length() + " characters");
-            long written = RstServer.measuredBodyBytes();
+            long written = RstServer.awaitMeasuredBodyBytes(30_000);
             assertTrue(written >= 0 && written < big.length,
                     "the client must cancel early; the server wrote " + written + " of " + big.length);
 

@@ -260,7 +260,7 @@ class AsyncTest {
             DocQLException e = (DocQLException) ee.getCause();
             assertEquals(502, e.status());
             assertTrue(e.body().length() <= 2048, "body() kept " + e.body().length() + " characters");
-            long written = RstServer.measuredBodyBytes();
+            long written = RstServer.awaitMeasuredBodyBytes(30_000);
             assertTrue(written >= 0 && written < big.length,
                     "the async client must cancel the read early; the server wrote " + written + " of " + big.length);
         } finally {

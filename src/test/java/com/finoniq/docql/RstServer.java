@@ -13,6 +13,7 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -67,6 +68,24 @@ final class RstServer {
      */
     static long measuredBodyBytes() {
         return measuredBodyBytes;
+    }
+
+    /**
+     * Waits up to {@code timeoutMs} for the measuring script's thread to
+     * publish {@link #measuredBodyBytes()} and returns it (still -1 on
+     * timeout). The client finishes the exchange as soon as its bounded read
+     * has what it needs — before the server thread notices the broken pipe
+     * and records what it wrote — so tests must await the publication
+     * instead of racing it.
+     */
+    static long awaitMeasuredBodyBytes(long timeoutMs) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+        long written = measuredBodyBytes;
+        while (written == -1 && System.nanoTime() < deadline) {
+            TimeUnit.MILLISECONDS.sleep(10);
+            written = measuredBodyBytes;
+        }
+        return written;
     }
 
     /** Stops the fake. */
