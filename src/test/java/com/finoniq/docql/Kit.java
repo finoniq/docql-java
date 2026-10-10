@@ -37,6 +37,16 @@ final class Kit {
         return read(Path.of("contract", relative));
     }
 
+    /** The file bytes of a golden case, e.g. {@code ascii-query}. */
+    static byte[] goldenFileBytes(String id) {
+        for (JsonNode c : golden().path("cases")) {
+            if (id.equals(c.path("id").asText())) {
+                return Base64.getDecoder().decode(c.path("fileBase64").asText());
+            }
+        }
+        throw new IllegalArgumentException("golden case " + id + " not found");
+    }
+
     /**
      * The file bytes of a case: base64 contents, or one byte repeated length
      * times.
