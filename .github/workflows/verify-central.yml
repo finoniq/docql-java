@@ -1,0 +1,120 @@
+# The post-Publish verification (D-16, JAVA-01): a workflow_dispatch with the
+# released version. It waits for repo1.maven.org to serve the full signed
+# bundle — POM, jar, sources and javadoc jars and every detached signature; the
+# sync after the owner's Publish click can take up to about an hour — and then
+# proves the release from a clean machine: verify-consumers.sh resolves
+# com.finoniq:docql:<version> from Maven Central in a fresh Maven project and a
+# fresh Gradle 9 project and runs the README quickstart against the pinned stub
+# (RELEASE_VERIFY_OK). A second job creates the GitHub Release from the
+# CHANGELOG section, idempotently (Go review IN-09b).
+#
+# It is deliberately not chained to release.yml: the owner's Publish click time
+# is unbounded, so the verify runs when the owner says the publish happened.
+# No job here enters an approval environment — every endpoint contacted is
+# public (repo1.maven.org) plus the job's own GITHUB_TOKEN.
+name: verify-central
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The released version (X.Y.Z, without the leading v)
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    permissions:
+      contents: read
+      packages: read
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: the version is a plain X.Y.Z release version
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$VERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo "VERSION is not a plain X.Y.Z release version" >&2
+            exit 2
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+          ref: refs/tags/v${{ inputs.version }}
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6  # v6.0.1
+        with:
+          distribution: temurin
+          java-version: 25
+      - name: wait for repo1.maven.org to serve the signed bundle
+        run: |
+          set -euo pipefail
+          base="https://repo1.maven.org/maven2/com/finoniq/docql/$VERSION"
+          files="docql-$VERSION.pom docql-$VERSION.jar docql-$VERSION-sources.jar docql-$VERSION-javadoc.jar docql-$VERSION.pom.asc docql-$VERSION.jar.asc docql-$VERSION-sources.jar.asc docql-$VERSION-javadoc.jar.asc"
+          ok=0
+          for i in $(seq 1 120); do
+            missing=0
+            for f in $files; do
+              code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$base/$f")
+              if [ "$code" != "200" ]; then
+                echo "try $i: $f -> $code"
+                missing=1
+              fi
+            done
+            if [ "$missing" -eq 0 ]; then
+              ok=1
+              break
+            fi
+            sleep 60
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "repo1.maven.org never served the full signed bundle after 120 tries" >&2
+            exit 1
+          fi
+          echo "REPO1_BUNDLE_OK: the POM, jar, sources and javadoc jars and their signatures are live"
+      - name: consumer verification from Central (fresh Maven + Gradle, README quickstart)
+        run: |
+          set -euo pipefail
+          gradle --version
+          scripts/stub-up.sh --run env GRADLE=gradle scripts/verify-consumers.sh --source central --version "$VERSION"
+      - name: RELEASE_VERIFY_OK
+        run: |
+          set -euo pipefail
+          echo "RELEASE_VERIFY_OK"
+
+  github-release:
+    needs: [verify]
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+          ref: refs/tags/v${{ inputs.version }}
+      - name: the CHANGELOG section becomes the release notes (idempotent)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          awk -v v="$VERSION" 'index($0, "## [" v "]") == 1 { found = 1; next } found && /^## \[/ { exit } found { print }' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"; then
+            echo "the CHANGELOG section for the release is empty" >&2
+            exit 1
+          fi
+          gh release view "v$VERSION" -R "$GH_REPO" > /dev/null 2>&1 || gh release create "v$VERSION" -R "$GH_REPO" --verify-tag --title "docql-java v$VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+          echo "GITHUB_RELEASE_OK: v$VERSION exists with the CHANGELOG section as its notes"
