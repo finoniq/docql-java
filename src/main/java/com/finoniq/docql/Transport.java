@@ -26,10 +26,6 @@ final class Transport {
         return mapFailure(failure, fileLength, key, host, timeout, true);
     }
 
-    /**
-     * Compile stub for the RED commit — the SDK-built/injected distinction
-     * arrives in the GREEN commit.
-     */
     static RuntimeException mapFailure(Throwable failure, long fileLength, String key,
             String host, Duration timeout, boolean sdkBuiltClient) {
         Throwable t = failure;
@@ -52,8 +48,13 @@ final class Transport {
                 ? " (the upload is " + fileLength + " bytes; the API rejects files over 25 MiB)"
                 : "";
         if (t instanceof HttpConnectTimeoutException) {
-            return new DocQLTimeoutException(
-                    Decoder.scrub("connect timed out after " + DocQL.CONNECT_TIMEOUT.toSeconds() + " s", key), t);
+            // Name the source: only the SDK-built client is known to use a
+            // 10 s connect timeout; an injected one keeps its own (D-09,
+            // Go review IN-01).
+            String message = sdkBuiltClient
+                    ? "connect timed out after " + DocQL.CONNECT_TIMEOUT.toSeconds() + " s"
+                    : "connect timed out";
+            return new DocQLTimeoutException(Decoder.scrub(message, key), t);
         }
         if (t instanceof HttpTimeoutException) {
             return new DocQLTimeoutException(

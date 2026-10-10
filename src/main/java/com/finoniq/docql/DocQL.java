@@ -58,16 +58,22 @@ public final class DocQL {
 
     private final String apiKey;
     private final String apiUrl;
+    private final String host;
     private final Duration timeout;
     private final HttpClient httpClient;
+    private final boolean sdkBuiltClient;
     private final Supplier<String> boundarySupplier;
 
     private DocQL(String apiKey, String apiUrl, Duration timeout, HttpClient httpClient,
-            Supplier<String> boundarySupplier) {
+            boolean sdkBuiltClient, Supplier<String> boundarySupplier) {
         this.apiKey = apiKey;
         this.apiUrl = apiUrl;
+        // Only the URI host ever names a failure: never user info, scheme or
+        // port noise, and never the request URL (D-12).
+        this.host = URI.create(apiUrl).getHost();
         this.timeout = timeout;
         this.httpClient = httpClient;
+        this.sdkBuiltClient = sdkBuiltClient;
         this.boundarySupplier = boundarySupplier;
     }
 
@@ -179,7 +185,7 @@ public final class DocQL {
             Thread.currentThread().interrupt();
             throw new DocQLConnectionException(Decoder.scrub("interrupted", apiKey), e);
         } catch (IOException e) {
-            throw Transport.mapFailure(e, fileLength, apiKey, apiUrl, timeout);
+            throw Transport.mapFailure(e, fileLength, apiKey, host, timeout, sdkBuiltClient);
         }
 
         int status = response.statusCode();
@@ -359,6 +365,7 @@ public final class DocQL {
         public DocQL build() {
             return new DocQL(resolveKey(), resolveUrl(), resolveTimeout(),
                     httpClient != null ? validateClient(httpClient) : sdkClient(),
+                    httpClient == null,
                     boundarySupplier);
         }
 
