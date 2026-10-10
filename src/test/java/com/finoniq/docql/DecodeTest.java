@@ -41,6 +41,9 @@ class DecodeTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
+    /** A key long enough that no reason literal collides with it when scrubbed. */
+    private static final String TEST_KEY = "unit-test-key";
+
     /** The HttpHeaders of a header map; lookups are case-insensitive. */
     private static HttpHeaders httpHeaders(Map<String, String> headers) {
         Map<String, List<String>> map = new LinkedHashMap<>();
@@ -57,7 +60,7 @@ class DecodeTest {
     }
 
     private static QueryResult parse(String body) {
-        return Decoder.parseResult(200, httpHeaders(Map.of()), body.getBytes(StandardCharsets.UTF_8), "k");
+        return Decoder.parseResult(200, httpHeaders(Map.of()), body.getBytes(StandardCharsets.UTF_8), TEST_KEY);
     }
 
     /**
@@ -132,7 +135,7 @@ class DecodeTest {
                 headers.put(header.getKey(), header.getValue().asText());
             }
             byte[] body = c.path("bodyUtf8").asText("").getBytes(StandardCharsets.UTF_8);
-            DocQLException e = decode(c.path("status").asInt(), headers, body, "k");
+            DocQLException e = decode(c.path("status").asInt(), headers, body, TEST_KEY);
 
             JsonNode expect = c.path("expect");
             assertEquals(expect.path("status").asInt(), e.status(), id + ": status");
@@ -161,7 +164,7 @@ class DecodeTest {
                 302, false);
         for (Map.Entry<Integer, Boolean> entry : expected.entrySet()) {
             DocQLException e = decode(entry.getKey(), Map.of(),
-                    envelope("service_overloaded", "busy", "req-1"), "k");
+                    envelope("service_overloaded", "busy", "req-1"), TEST_KEY);
             assertEquals(entry.getValue(), e.retryable(), "status " + entry.getKey());
         }
     }
@@ -188,7 +191,7 @@ class DecodeTest {
         // Parsed on every non-2xx: 503, 302 and 404 alike.
         for (int status : new int[] {503, 302, 404}) {
             DocQLException e = decode(status, Map.of("Retry-After", "9"),
-                    envelope("service_overloaded", "busy", "req-2"), "k");
+                    envelope("service_overloaded", "busy", "req-2"), TEST_KEY);
             assertEquals(Duration.ofSeconds(9), e.retryAfter(), "status " + status);
         }
     }
@@ -198,7 +201,7 @@ class DecodeTest {
         String[] notUsable = {"", "not json", "[1]", "{}{}"};
         for (String body : notUsable) {
             DocQLException e = assertThrows(DocQLException.class,
-                    () -> Decoder.parseResult(200, httpHeaders(Map.of()), body.getBytes(StandardCharsets.UTF_8), "k"),
+                    () -> Decoder.parseResult(200, httpHeaders(Map.of()), body.getBytes(StandardCharsets.UTF_8), TEST_KEY),
                     "body " + body + " must not decode to a result");
             assertEquals(200, e.status(), "body " + body + ": the 2xx status is kept");
             assertNull(e.reason(), "body " + body + ": an unusable body has no reason");
@@ -210,7 +213,7 @@ class DecodeTest {
         for (String data : dataNotAnObject) {
             DocQLException e = assertThrows(DocQLException.class,
                     () -> Decoder.parseResult(200, httpHeaders(Map.of()),
-                            ("{\"data\":" + data + "}").getBytes(StandardCharsets.UTF_8), "k"),
+                            ("{\"data\":" + data + "}").getBytes(StandardCharsets.UTF_8), TEST_KEY),
                     "data " + data + " must not decode to a result");
             assertEquals("unexpected response: data is not a JSON object", e.serverMessage(), "data " + data);
         }
@@ -281,15 +284,15 @@ class DecodeTest {
     void requestIdFallback() {
         // Success: an empty metadata request_id falls back to the header.
         QueryResult fromHeader = Decoder.parseResult(200, httpHeaders(Map.of("x-request-id", "hdr-1")),
-                "{\"data\":{},\"metadata\":{\"request_id\":\"\"}}".getBytes(StandardCharsets.UTF_8), "k");
+                "{\"data\":{},\"metadata\":{\"request_id\":\"\"}}".getBytes(StandardCharsets.UTF_8), TEST_KEY);
         assertEquals("hdr-1", fromHeader.requestId());
         // Success: neither present → "".
         assertEquals("", parse("{\"data\":{}}").requestId());
         // Error: neither present → null (D-21).
-        assertNull(decode(500, Map.of(), envelope("service_overloaded", "busy", null), "k").requestId());
+        assertNull(decode(500, Map.of(), envelope("service_overloaded", "busy", null), TEST_KEY).requestId());
         // Error: no metadata at all → the header.
         assertEquals("hdr-2",
-                decode(500, Map.of("x-request-id", "hdr-2"), "{\"error_info\":\"boom\"}", "k").requestId());
+                decode(500, Map.of("x-request-id", "hdr-2"), "{\"error_info\":\"boom\"}", TEST_KEY).requestId());
     }
 
     @Test
@@ -305,32 +308,32 @@ class DecodeTest {
 
     @Test
     void invalidUtf8Replaced() {
-        DocQLException e = decode(500, Map.of(), new byte[] {'a', (byte) 0xff, (byte) 0xfe, 'b'}, "k");
+        DocQLException e = decode(500, Map.of(), new byte[] {'a', (byte) 0xff, (byte) 0xfe, 'b'}, TEST_KEY);
         assertTrue(e.body().contains("\uFFFD"), "invalid UTF-8 must become U+FFFD: " + e.body());
     }
 
     @Test
     void errorStrings() {
         DocQLException full = decode(422, Map.of("Retry-After", "0"),
-                envelope("missing_query_or_prompt", "need a query", "r1"), "k");
+                envelope("missing_query_or_prompt", "need a query", "r1"), TEST_KEY);
         assertEquals("422 missing_query_or_prompt: need a query (request_id=r1, retry_after=0s)",
                 full.getMessage());
 
-        DocQLException noMessage = decode(401, Map.of(), envelope("invalid_api_key", null, "r1"), "k");
+        DocQLException noMessage = decode(401, Map.of(), envelope("invalid_api_key", null, "r1"), TEST_KEY);
         assertEquals("401 invalid_api_key (request_id=r1)", noMessage.getMessage());
 
-        DocQLException nonDocql = decode(502, Map.of(), "<html>  big \r\n body </html>", "k");
+        DocQLException nonDocql = decode(502, Map.of(), "<html>  big \r\n body </html>", TEST_KEY);
         assertEquals("502 (non-DocQL response): <html> big body </html>", nonDocql.getMessage());
 
         // The snippet collapses whitespace and is cut at 200 characters.
-        DocQLException longBody = decode(502, Map.of(), "a".repeat(500), "k");
+        DocQLException longBody = decode(502, Map.of(), "a".repeat(500), TEST_KEY);
         assertEquals("502 (non-DocQL response): " + "a".repeat(200), longBody.getMessage());
 
-        DocQLException empty = decode(502, Map.of(), "", "k");
+        DocQLException empty = decode(502, Map.of(), "", TEST_KEY);
         assertEquals("502 (non-DocQL response): (empty body)", empty.getMessage());
 
         // The request id rides the non-DocQL form too, when present.
-        DocQLException withId = decode(502, Map.of("x-request-id", "x"), "", "k");
+        DocQLException withId = decode(502, Map.of("x-request-id", "x"), "", TEST_KEY);
         assertEquals("502 (non-DocQL response): (empty body) (request_id=x)", withId.getMessage());
     }
 
@@ -348,7 +351,7 @@ class DecodeTest {
         assertTrue(message.contains("***"));
         assertEquals("500 *** bad reason: info with tabs and *** (request_id=r 1)", message);
 
-        assertEquals("bad reason ***", e.reason());
+        assertEquals("*** bad reason", e.reason());
         assertEquals("info with tabs and ***", e.serverMessage());
         assertEquals("r 1", e.requestId());
     }

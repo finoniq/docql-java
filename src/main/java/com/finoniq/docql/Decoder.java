@@ -74,9 +74,9 @@ final class Decoder {
         String requestId = "";
         JsonNode rid = metadata.get("request_id");
         if (rid != null && rid.isTextual() && !rid.textValue().isEmpty()) {
-            requestId = rid.textValue();
+            requestId = sanitise(rid.textValue(), key);
         } else {
-            String fromHeader = headerRequestId(headers);
+            String fromHeader = headerRequestId(headers, key);
             if (fromHeader != null) {
                 requestId = fromHeader;
             }
@@ -106,20 +106,20 @@ final class Decoder {
             if (metadata != null && metadata.isObject()) {
                 JsonNode reasonNode = metadata.get("reason");
                 if (reasonNode != null && reasonNode.isTextual()) {
-                    reason = reasonNode.textValue();
+                    reason = sanitise(reasonNode.textValue(), key);
                     JsonNode info = root.get("error_info");
                     if (info != null && info.isTextual()) {
-                        serverMessage = scrub(info.textValue(), key);
+                        serverMessage = sanitise(info.textValue(), key);
                     }
                     JsonNode rid = metadata.get("request_id");
                     if (rid != null && rid.isTextual() && !rid.textValue().isEmpty()) {
-                        requestId = rid.textValue();
+                        requestId = sanitise(rid.textValue(), key);
                     }
                 }
             }
         }
         if (requestId == null) {
-            requestId = headerRequestId(headers);
+            requestId = headerRequestId(headers, key);
         }
         return new DocQLException(status, reason, requestId,
                 parseRetryAfter(headerValue(headers, "retry-after"), Instant.now()),
@@ -168,6 +168,36 @@ final class Decoder {
     }
 
     /**
+     * Makes a server-controlled field safe to hand to a caller and to a log
+     * (Go review IN-02): every run of whitespace or control characters
+     * collapses to one space, the ends are trimmed, and then the key is
+     * scrubbed — so a server cannot forge log lines or echo the key back
+     * through {@code reason}, {@code request_id} or {@code error_info}.
+     * Null passes through; an empty text stays empty.
+     */
+    static String sanitise(String text, String key) {
+        if (text == null || text.isEmpty()) {
+            return text;
+        }
+        StringBuilder collapsed = new StringBuilder(text.length());
+        boolean pendingSpace = false;
+        for (int i = 0; i < text.length(); ) {
+            int codePoint = text.codePointAt(i);
+            if (Character.isWhitespace(codePoint) || codePoint < 0x20 || codePoint == 0x7F) {
+                pendingSpace = true;
+            } else {
+                if (pendingSpace && collapsed.length() > 0) {
+                    collapsed.append(' ');
+                }
+                pendingSpace = false;
+                collapsed.appendCodePoint(codePoint);
+            }
+            i += Character.charCount(codePoint);
+        }
+        return scrub(collapsed.toString(), key);
+    }
+
+    /**
      * Makes a response body safe to store on an error: invalid UTF-8 becomes
      * the replacement character, every occurrence of the key is replaced
      * before any truncation (so a key straddling the cut can never survive as
@@ -189,7 +219,7 @@ final class Decoder {
 
     private static DocQLException unusable(int status, HttpHeaders headers, byte[] body,
             String key, String message) {
-        return new DocQLException(status, null, headerRequestId(headers), null, false,
+        return new DocQLException(status, null, headerRequestId(headers, key), null, false,
                 message, scrubAndTruncate(body, key));
     }
 
@@ -213,9 +243,9 @@ final class Decoder {
         return headers.firstValue(name).orElse(null);
     }
 
-    /** The x-request-id header value, or null when absent or empty. */
-    private static String headerRequestId(HttpHeaders headers) {
+    /** The sanitised {@code x-request-id} header value, or null when absent or empty. */
+    private static String headerRequestId(HttpHeaders headers, String key) {
         String value = headerValue(headers, "x-request-id");
-        return value == null || value.isEmpty() ? null : value;
+        return value == null || value.isEmpty() ? null : sanitise(value, key);
     }
 }

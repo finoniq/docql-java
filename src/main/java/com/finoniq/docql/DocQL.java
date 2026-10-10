@@ -186,7 +186,7 @@ public final class DocQL {
         byte[] body = response.body();
         if (status / 100 == 2) {
             if (body.length > SUCCESS_BODY_LIMIT) {
-                throw new DocQLException(status, null, headerRequestId(response.headers()),
+                throw new DocQLException(status, null, Decoder.sanitise(headerRequestId(response.headers()), apiKey),
                         null, false, "response body exceeds " + SUCCESS_BODY_LIMIT + " bytes",
                         Decoder.scrubAndTruncate(body, apiKey));
             }
@@ -244,6 +244,7 @@ public final class DocQL {
         return "DocQL{apiUrl=" + apiUrl + ", apiKey=***, timeout=" + timeout + "}";
     }
 
+    /** The raw {@code x-request-id} header value, or null when absent or empty. */
     private static String headerRequestId(HttpHeaders headers) {
         String value = headers.firstValue("x-request-id").orElse(null);
         return value == null || value.isEmpty() ? null : value;
