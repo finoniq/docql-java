@@ -1,0 +1,171 @@
+# The release workflow (JAVA-01, D-13..D-16): a pushed v* tag becomes a signed
+# Maven Central deployment that stops at VALIDATED — nothing is published until
+# the owner presses Publish in the Central Portal (D-16).
+#
+#   1. precheck       (no approval) refuses every wrong tag: shape vX.Y.Z,
+#                     DocQL.VERSION == the POM project version == the tag minus
+#                     "v" (D-13), a dated CHANGELOG entry, an annotated tag, the
+#                     tagged commit on origin/main with green guard/ci/contract
+#                     push runs on main, and repo1.maven.org still answering 404
+#                     for the version (the first fetch of a version is permanent).
+#   2. ci, contract   run the same checks again on the tagged commit — with no
+#                     secrets passed to either reusable workflow (Go review WR-06).
+#   3. publish        waits for the owner to approve the `maven-central`
+#                     environment, re-verifies that the peeled tag still points
+#                     at the prechecked commit (Go review WR-05), then uploads
+#                     the signed bundle with autoPublish=false and
+#                     waitUntil=validated and stops: the job summary tells the
+#                     owner to press Publish in the Portal. No step in this
+#                     workflow ever calls the Central publish endpoint.
+#
+# Before the owner approves, a mistaken tag can still be deleted — no
+# irreversible step has run (D-16).
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  precheck:
+    name: precheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      version: ${{ steps.precheck.outputs.version }}
+      sha: ${{ steps.precheck.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0  # origin/main and the tag must both be present
+      - name: validate the tag against DocQL.VERSION, the POM, the CHANGELOG and origin/main
+        id: precheck
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          scripts/release-precheck.sh
+      - name: the tag is annotated
+        env:
+          TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          type=$(gh api "repos/$GH_REPO/git/ref/tags/$TAG" --jq .object.type)
+          if [ "$type" != "tag" ]; then
+            echo "the release tag is not an annotated tag (git tag -a)" >&2
+            exit 1
+          fi
+      - name: the tagged commit has green guard/ci/contract push runs on main
+        env:
+          SHA: ${{ steps.precheck.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          for wf in guard.yml ci.yml contract.yml; do
+            green=$(gh run list -R "$GH_REPO" --workflow "$wf" --branch main --event push --commit "$SHA" --json conclusion --jq '[.[] | select(.conclusion == "success")] | length')
+            if [ "$green" -lt 1 ]; then
+              echo "no successful $wf push run on main for the tagged commit" >&2
+              exit 1
+            fi
+            echo "$wf: $green successful push run(s) on main for $SHA"
+          done
+      - name: Maven Central does not have this version yet
+        env:
+          VERSION: ${{ steps.precheck.outputs.version }}
+        run: |
+          set -euo pipefail
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "https://repo1.maven.org/maven2/com/finoniq/docql/$VERSION/docql-$VERSION.pom")
+          if [ "$code" != "404" ]; then
+            echo "repo1.maven.org answers $code, not 404 — the version is already on Central and a Central release is permanent (D-16)" >&2
+            exit 1
+          fi
+          echo "REPO1_404_OK: the version is still free"
+
+  ci:
+    needs: [precheck]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
+  contract:
+    needs: [precheck]
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/contract.yml
+
+  publish:
+    needs: [precheck, ci, contract]
+    name: publish (stops at VALIDATED)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: maven-central
+      url: https://central.sonatype.com/publishing/deployments
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ github.ref_name }}
+      VERSION: ${{ needs.precheck.outputs.version }}
+    steps:
+      - name: the tag still points at the prechecked commit
+        env:
+          SHA: ${{ needs.precheck.outputs.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          peeled=$(git ls-remote "https://github.com/$REPO.git" "refs/tags/$TAG^{}" | cut -f1)
+          if [ -z "$peeled" ] || [ "$peeled" != "$SHA" ]; then
+            echo "the tag moved or vanished since precheck — refusing to deploy (Go review WR-05)" >&2
+            exit 1
+          fi
+          echo "TAG_STILL_OK: the peeled tag still points at the prechecked commit"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.precheck.outputs.sha }}
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6  # v6.0.1
+        with:
+          distribution: temurin
+          java-version: 25
+          server-id: central
+          server-username: CENTRAL_TOKEN_USERNAME
+          server-password: CENTRAL_TOKEN_PASSWORD
+      - name: upload the signed bundle and stop at VALIDATED
+        env:
+          CENTRAL_TOKEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
+          CENTRAL_TOKEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
+          MAVEN_GPG_KEY: ${{ secrets.MAVEN_GPG_KEY }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          ./mvnw -B -ntp -P release -DskipITs deploy 2>&1 | tee "$RUNNER_TEMP/deploy.log"
+          id=$(sed -nE 's/^.*deploymentId: ([0-9a-f]{16,64})\..*$/\1/p' "$RUNNER_TEMP/deploy.log" | tail -n 1)
+          {
+            echo "### Deployment VALIDATED — nothing is published yet"
+            echo
+            if [ -n "$id" ]; then
+              echo "Deployment id: \`$id\`"
+              echo
+              echo "RELEASE_VALIDATED $id"
+            else
+              echo "The deployment id could not be read from the deploy log; find the deployment in the Portal."
+              echo
+              echo "RELEASE_VALIDATED (id not in the log — see the Portal)"
+            fi
+            echo
+            echo "**Press Publish in the Central Portal to publish** — automation never publishes (D-16): <https://central.sonatype.com/publishing/deployments>"
+          } >> "$GITHUB_STEP_SUMMARY"

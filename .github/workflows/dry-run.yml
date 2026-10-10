@@ -1,0 +1,156 @@
+# The D-15 dry run (D-15 step 2, D-18): a workflow_dispatch from main that
+# enters the `maven-central` environment — the owner temporarily adds `main` to
+# the environment's deployment policy and removes it afterwards; no dry-run tag
+# is ever created — uploads the signed bundle under a distinct deployment name,
+# waits for the Portal's VALIDATED state, and then DROPS the deployment.
+#
+# The only call on the deployment path is DELETE. No step ever calls the
+# Central publish endpoint, and publishing stays the owner's Portal click
+# (D-16). If the deployment id cannot be parsed from the plugin log
+# (assumption A2), the job prints DRY_RUN_DROP_MANUAL and fails so the owner
+# drops the deployment in the Portal UI.
+name: dry-run
+
+on:
+  workflow_dispatch: {}
+
+permissions: {}
+
+concurrency:
+  group: dry-run-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  precheck:
+    name: precheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      version: ${{ steps.precheck.outputs.version }}
+      sha: ${{ steps.precheck.outputs.sha }}
+    steps:
+      - name: the dry run dispatches from main only
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF:-}" != "refs/heads/main" ]; then
+            echo "the dry run only runs from refs/heads/main (D-18)" >&2
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0  # the dry-run pre-check compares HEAD with origin/main
+      - name: validate HEAD against DocQL.VERSION, the POM and the CHANGELOG
+        id: precheck
+        run: |
+          set -euo pipefail
+          scripts/release-precheck.sh --dry-run
+      - name: main has green guard/ci/contract push runs
+        env:
+          SHA: ${{ steps.precheck.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          for wf in guard.yml ci.yml contract.yml; do
+            green=$(gh run list -R "$GH_REPO" --workflow "$wf" --branch main --event push --commit "$SHA" --json conclusion --jq '[.[] | select(.conclusion == "success")] | length')
+            if [ "$green" -lt 1 ]; then
+              echo "no successful $wf push run on main for this commit" >&2
+              exit 1
+            fi
+            echo "$wf: $green successful push run(s) on main for $SHA"
+          done
+      - name: Maven Central does not have this version yet
+        env:
+          VERSION: ${{ steps.precheck.outputs.version }}
+        run: |
+          set -euo pipefail
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "https://repo1.maven.org/maven2/com/finoniq/docql/$VERSION/docql-$VERSION.pom")
+          if [ "$code" != "404" ]; then
+            echo "repo1.maven.org answers $code, not 404 — there is nothing left to validate for this version" >&2
+            exit 1
+          fi
+          echo "REPO1_404_OK: the version is still free"
+
+  dry-run:
+    needs: [precheck]
+    name: dry run (validate, then drop)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: maven-central
+      url: https://central.sonatype.com/publishing/deployments
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.precheck.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.precheck.outputs.sha }}
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6  # v6.0.1
+        with:
+          distribution: temurin
+          java-version: 25
+          server-id: central
+          server-username: CENTRAL_TOKEN_USERNAME
+          server-password: CENTRAL_TOKEN_PASSWORD
+      - name: upload, wait for VALIDATED, then drop the deployment
+        env:
+          CENTRAL_TOKEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
+          CENTRAL_TOKEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
+          MAVEN_GPG_KEY: ${{ secrets.MAVEN_GPG_KEY }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+        run: |
+          set -uo pipefail
+          LOG="$RUNNER_TEMP/deploy.log"
+          ./mvnw -B -ntp -P release -DskipITs deploy "-Ddocql.deploymentName=docql $VERSION DRY RUN - drop" 2>&1 | tee "$LOG"
+          deploy_rc=${PIPESTATUS[0]}
+          id=$(sed -nE 's/^.*deploymentId: ([0-9a-f]{16,64})\..*$/\1/p' "$LOG" | tail -n 1)
+          if [ -z "$id" ]; then
+            echo "DRY_RUN_DROP_MANUAL"
+            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+              {
+                echo "### DRY RUN — manual drop needed"
+                echo
+                echo "The deployment id could not be parsed from the plugin log (assumption A2)."
+                echo "Open <https://central.sonatype.com/publishing/deployments> and drop the deployment named \`docql $VERSION DRY RUN - drop\` by hand."
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+            exit 1
+          fi
+          bearer=$(printf '%s' "$CENTRAL_TOKEN_USERNAME:$CENTRAL_TOKEN_PASSWORD" | base64 -w0)
+          echo "::add-mask::$bearer"
+          status_json=$(curl -sS --max-time 30 -X POST -H "Authorization: Bearer $bearer" "https://central.sonatype.com/api/v1/publisher/status?id=$id" 2>/dev/null || true)
+          state=$(printf '%s' "$status_json" | python3 -I -c 'import json, sys; sys.stdout.write(str(json.load(sys.stdin).get("deploymentState", "")))' 2>/dev/null || true)
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            {
+              echo "### DRY RUN deployment $id"
+              echo
+              echo "deploymentState: \`$state\` (secret-free status response below)"
+              echo
+              echo '```json'
+              echo "$status_json"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          drop_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 -X DELETE -H "Authorization: Bearer $bearer" "https://central.sonatype.com/api/v1/publisher/deployment/$id" 2>/dev/null || true)
+          case "$drop_code" in
+            2??)
+              echo "DRY_RUN_DROPPED $id"
+              ;;
+            *)
+              echo "DRY_RUN_DROP_MANUAL $id"
+              exit 1
+              ;;
+          esac
+          if [ "$deploy_rc" -eq 0 ] && [ "$state" = "VALIDATED" ]; then
+            echo "DRY_RUN_VALIDATED $id"
+            exit 0
+          fi
+          echo "DRY_RUN_FAILED $id state=$state"
+          exit 1
