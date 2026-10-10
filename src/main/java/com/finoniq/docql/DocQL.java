@@ -14,6 +14,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -201,6 +202,23 @@ public final class DocQL {
         // Every other status decodes as an error, 3xx included (D-09): the
         // key never leaves the configured host on a redirect.
         throw Decoder.decodeError(status, response.headers(), body, apiKey);
+    }
+
+    /**
+     * Compile-only stub for the 13-04 RED phase: the async surface does not
+     * exist yet, so every call fails until the GREEN commit implements it.
+     */
+    public CompletableFuture<QueryResult> queryDocumentAsync(DocFile file, Instruction instruction) {
+        throw new UnsupportedOperationException("queryDocumentAsync is implemented in the 13-04 GREEN commit");
+    }
+
+    /**
+     * Compile-only stub for the 13-04 RED phase: the async surface does not
+     * exist yet, so every call fails until the GREEN commit implements it.
+     */
+    public CompletableFuture<QueryResult> queryDocumentAsync(DocFile file, Instruction instruction,
+            QueryOptions options) {
+        throw new UnsupportedOperationException("queryDocumentAsync is implemented in the 13-04 GREEN commit");
     }
 
     /**

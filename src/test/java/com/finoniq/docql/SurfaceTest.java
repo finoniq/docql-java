@@ -21,8 +21,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@code com.finoniq.docql} in {@code target/classes}, their nested public
  * builders, every type's public declared methods and the absence of public
  * constructors — pinned so nothing drifts before the owner surface review.
- * 13-04 adds the two {@code queryDocumentAsync} overloads to the pinned
- * {@code DocQL} list.
+ * The pinned {@code DocQL} list carries the two {@code queryDocumentAsync}
+ * overloads (13-04, D-05).
  */
 class SurfaceTest {
 
@@ -67,7 +67,8 @@ class SurfaceTest {
 
         Map<String, Set<String>> wantMethods = new TreeMap<>();
         wantMethods.put("DocQL", Set.of("builder()", "queryDocument(DocFile,Instruction)",
-                "queryDocument(DocFile,Instruction,QueryOptions)", "toString()"));
+                "queryDocument(DocFile,Instruction,QueryOptions)", "queryDocumentAsync(DocFile,Instruction)",
+                "queryDocumentAsync(DocFile,Instruction,QueryOptions)", "toString()"));
         wantMethods.put("DocQL$Builder", Set.of("apiKey(String)", "apiUrl(String)", "timeout(Duration)",
                 "httpClient(HttpClient)", "build()"));
         wantMethods.put("DocFile", Set.of("bytes(byte[],String)", "path(Path)", "stream(InputStream,long,String)"));
