@@ -191,6 +191,7 @@ public final class DocQL {
         private String apiKey;
         private String apiUrl;
         private Duration timeout;
+        private HttpClient httpClient;
 
         private Builder() {
         }
@@ -229,6 +230,18 @@ public final class DocQL {
          */
         public Builder timeout(Duration timeout) {
             this.timeout = timeout;
+            return this;
+        }
+
+        /**
+         * Injects a caller-owned {@link HttpClient} to send the requests
+         * with. Recorded verbatim; build() applies the redirect policy (D-10).
+         *
+         * @param httpClient the client to inject; must not be null
+         * @return this builder
+         */
+        public Builder httpClient(HttpClient httpClient) {
+            this.httpClient = httpClient;
             return this;
         }
 
