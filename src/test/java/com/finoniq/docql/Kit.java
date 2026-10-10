@@ -32,6 +32,11 @@ final class Kit {
         return load("contract/golden.json");
     }
 
+    /** The manifest's file digests, e.g. {@code files["sdk-cases.json"]}. */
+    static JsonNode manifestFiles() {
+        return load("contract/manifest.json").path("files");
+    }
+
     /** The golden request bytes, e.g. {@code golden/ascii-query.bin}. */
     static byte[] goldenBin(String relative) {
         return read(Path.of("contract", relative));

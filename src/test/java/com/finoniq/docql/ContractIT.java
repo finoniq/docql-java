@@ -4,12 +4,14 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestFactory;
 
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.RandomAccessFile;
 import java.io.UncheckedIOException;
 import java.net.URI;
@@ -19,6 +21,8 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -44,7 +48,12 @@ import static org.junit.jupiter.api.Assertions.fail;
  * same decoder the SDK uses, against the digest-pinned stub booted by
  * {@code scripts/stub-up.sh}. The stub URL arrives in {@code DOCQL_STUB_URL};
  * with {@code DOCQL_REQUIRE_STUB=1} a missing stub fails the run, otherwise
- * the cases skip so plain unit runs stay green. Assertions stay semantic:
+ * the cases skip so plain unit runs stay green. Before any case runs, a
+ * once-per-JVM gate proves the stub serves exactly the vendored kit: the
+ * sha256 of the served bytes, the manifest entry and the vendored file must
+ * all agree, and any mismatch — or a read failure — fails every test with
+ * {@code CONTRACT_KIT_MISMATCH:} instead of letting a wrong kit look like a
+ * broken network. Assertions stay semantic:
  * they never read the stub's extraction state or any stub-prefixed metadata
  * key, so a cached repeat passes like a fresh call. The Java-only live checks
  * prove the async surface, path and stream inputs, the deadline, the size
@@ -55,6 +64,12 @@ class ContractIT {
     /** How much of /__stub/sdk-cases may be read for the kit check. */
     private static final int KIT_READ_CAP = 1 << 20;
 
+    /** The plain client of the kit check; it never carries the API key. */
+    private static final HttpClient GATE_CLIENT = HttpClient.newBuilder()
+            .followRedirects(HttpClient.Redirect.NEVER)
+            .connectTimeout(Duration.ofSeconds(10))
+            .build();
+
     /** Cases that ran to completion, sdk and raw together (the count gate). */
     private static int ran;
 
@@ -64,11 +79,49 @@ class ContractIT {
     /** The vendored sdk+raw case count the count gate demands. */
     private static int wantCases;
 
+    /** The resolved stub base, or null when no stub runs. */
+    private static String base;
+
+    /** The kit-gate detail; null once the three-way sha256 check has passed. */
+    private static String gateError;
+
+    /**
+     * Once per JVM: the strict-stub rule, then the three-way sha256 gate over
+     * the served bytes, the manifest entry and the vendored file. A gate
+     * failure is kept and fails every stub-bound test by name.
+     */
+    @BeforeAll
+    static void resolveStubAndCheckKit() {
+        String url = System.getenv("DOCQL_STUB_URL");
+        if (url == null || url.isBlank()) {
+            if ("1".equals(System.getenv("DOCQL_REQUIRE_STUB"))) {
+                fail("DOCQL_REQUIRE_STUB=1 but DOCQL_STUB_URL is not set: "
+                        + "run the cases through scripts/stub-up.sh --run");
+            }
+            return;
+        }
+        base = url.replaceAll("/+$", "");
+        stubbed = true;
+        wantCases = caseCount(Kit.sdkCases());
+        gateError = verifyKit(base);
+    }
+
+    /**
+     * The stub base for a stub-bound test: fails by name when the kit gate
+     * has not passed, so no case ever runs against an unproven stub.
+     */
+    private static String gatedBase() {
+        if (gateError != null) {
+            fail("CONTRACT_KIT_MISMATCH: " + gateError);
+        }
+        return base;
+    }
+
     /** The strict-stub rule: REQUIRE_STUB=1 fails when no stub runs, else skip. */
     @Test
     void stubRequirement() {
-        String base = stubBase();
-        if (base == null) {
+        String b = gatedBase();
+        if (b == null) {
             Assumptions.assumeTrue(false,
                     "DOCQL_STUB_URL is not set: run through scripts/stub-up.sh --run to check the shared cases");
         }
@@ -76,20 +129,18 @@ class ContractIT {
 
     @TestFactory
     Stream<DynamicTest> sdkCases() {
-        String base = stubBase();
-        if (base == null) {
+        String b = gatedBase();
+        if (b == null) {
             return Stream.empty();
         }
         JsonNode kit = Kit.sdkCases();
-        stubbed = true;
-        wantCases = caseCount(kit);
         List<DynamicTest> tests = new ArrayList<>();
         for (JsonNode c : kit.path("cases")) {
             if (!"sdk".equals(c.path("via").asText())) {
                 continue;
             }
             String id = c.path("id").asText();
-            tests.add(DynamicTest.dynamicTest(id, () -> runCase(kit, c, base)));
+            tests.add(DynamicTest.dynamicTest(id, () -> runCase(kit, c, b)));
         }
         return tests.stream();
     }
@@ -102,20 +153,18 @@ class ContractIT {
      */
     @TestFactory
     Stream<DynamicTest> rawCases() {
-        String base = stubBase();
-        if (base == null) {
+        String b = gatedBase();
+        if (b == null) {
             return Stream.empty();
         }
         JsonNode kit = Kit.sdkCases();
-        stubbed = true;
-        wantCases = caseCount(kit);
         List<DynamicTest> tests = new ArrayList<>();
         for (JsonNode c : kit.path("cases")) {
             if (!"raw".equals(c.path("via").asText())) {
                 continue;
             }
             String id = c.path("id").asText();
-            tests.add(DynamicTest.dynamicTest(id, () -> runRawCase(kit, c, base)));
+            tests.add(DynamicTest.dynamicTest(id, () -> runRawCase(kit, c, b)));
         }
         return tests.stream();
     }
@@ -149,13 +198,11 @@ class ContractIT {
      */
     @TestFactory
     Stream<DynamicTest> javaExtras() {
-        String base = stubBase();
+        String base = gatedBase();
         if (base == null) {
             return Stream.empty();
         }
         JsonNode kit = Kit.sdkCases();
-        stubbed = true;
-        wantCases = caseCount(kit);
         String valid = kit.path("keys").path("valid").asText();
         String invalid = kit.path("keys").path("invalid").asText();
         byte[] okPdf = Kit.goldenFileBytes("ascii-query");
@@ -514,19 +561,64 @@ class ContractIT {
     }
 
     /**
-     * The stub base URL, or null when no stub runs. With
-     * {@code DOCQL_REQUIRE_STUB=1} a missing stub fails, naming the variable
-     * and the script that boots it.
+     * The kit gate (T-13-19), run once per JVM: the sha256 of the bytes
+     * {@code GET /__stub/sdk-cases} serves (read capped at 1 MiB) must equal
+     * the sdk-cases.json entry of the vendored manifest and the vendored file
+     * itself. Any mismatch — or a non-200, over-cap body, or an unreachable
+     * stub — returns the failure detail that fails every stub-bound test
+     * under the {@code CONTRACT_KIT_MISMATCH:} prefix; it can fail, never
+     * silently skip.
      */
-    private static String stubBase() {
-        String url = System.getenv("DOCQL_STUB_URL");
-        if (url == null || url.isBlank()) {
-            if ("1".equals(System.getenv("DOCQL_REQUIRE_STUB"))) {
-                fail("DOCQL_REQUIRE_STUB=1 but DOCQL_STUB_URL is not set: "
-                        + "run the cases through scripts/stub-up.sh --run");
+    private static String verifyKit(String stubBase) {
+        HttpRequest request = HttpRequest.newBuilder(URI.create(stubBase + "/__stub/sdk-cases"))
+                .timeout(Duration.ofSeconds(30))
+                .GET()
+                .build();
+        HttpResponse<InputStream> response;
+        try {
+            response = GATE_CLIENT.send(request, HttpResponse.BodyHandlers.ofInputStream());
+        } catch (IOException e) {
+            return "GET " + stubBase + "/__stub/sdk-cases: " + e.getClass().getSimpleName();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return "GET " + stubBase + "/__stub/sdk-cases: interrupted";
+        }
+        try (InputStream body = response.body()) {
+            if (response.statusCode() != 200) {
+                return "GET /__stub/sdk-cases: HTTP " + response.statusCode();
+            }
+            byte[] served = body.readNBytes(KIT_READ_CAP + 1);
+            if (served.length > KIT_READ_CAP) {
+                return "/__stub/sdk-cases exceeds the " + KIT_READ_CAP + "-byte read cap";
+            }
+            String servedSha = sha256Hex(served);
+            String declared = Kit.manifestFiles().path("sdk-cases.json").asText(null);
+            if (declared == null || declared.isEmpty()) {
+                return "contract/manifest.json carries no sdk-cases.json entry";
+            }
+            String vendoredSha = sha256Hex(Files.readAllBytes(Path.of("contract", "sdk-cases.json")));
+            if (!servedSha.equals(declared) || !servedSha.equals(vendoredSha)) {
+                return "sdk-cases.json sha256 mismatch: served " + servedSha
+                        + ", manifest " + declared + ", vendored " + vendoredSha;
             }
             return null;
+        } catch (IOException e) {
+            return "read /__stub/sdk-cases: " + e.getClass().getSimpleName();
         }
-        return url.replaceAll("/+$", "");
+    }
+
+    private static String sha256Hex(byte[] bytes) {
+        MessageDigest digest;
+        try {
+            digest = MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 unavailable", e);
+        }
+        StringBuilder hex = new StringBuilder(bytes.length * 2);
+        for (byte b : digest.digest(bytes)) {
+            hex.append(Character.forDigit((b >> 4) & 0xF, 16));
+            hex.append(Character.forDigit(b & 0xF, 16));
+        }
+        return hex.toString();
     }
 }
