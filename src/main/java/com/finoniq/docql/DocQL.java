@@ -113,6 +113,109 @@ public final class DocQL {
      * @throws DocQLTimeoutException when the request deadline expires
      */
     public QueryResult queryDocument(DocFile file, Instruction instruction, QueryOptions options) {
+        PreparedRequest prepared = prepare(file, instruction, options);
+
+        HttpResponse<byte[]> response;
+        try {
+            response = httpClient.send(prepared.request(), BoundedBodySubscriber.handler());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new DocQLConnectionException(Decoder.scrub("interrupted", apiKey), e);
+        } catch (IOException e) {
+            throw Transport.mapFailure(e, prepared.fileLength(), apiKey, host, timeout, sdkBuiltClient);
+        }
+
+        return decode(response);
+    }
+
+    /**
+     * Uploads one document with an instruction and returns its extraction
+     * result as a {@link CompletableFuture}, with default options. Built
+     * directly on {@link HttpClient#sendAsync}: the SDK owns no thread pool
+     * and has no executor option (D-05).
+     *
+     * <p>A {@code null} file or instruction throws
+     * {@link NullPointerException} immediately — no future is returned.
+     * Every other failure completes the returned future exceptionally with
+     * the same exception the synchronous call would throw — a
+     * {@link DocQLException}, a {@link DocQLConnectionException} or a
+     * {@link DocQLTimeoutException} — surfacing as the cause of
+     * {@link ExecutionException} from {@link CompletableFuture#get() get()}
+     * and of {@link CompletionException} from
+     * {@link CompletableFuture#join() join()}.
+     *
+     * @throws NullPointerException if file or instruction is null
+     */
+    public CompletableFuture<QueryResult> queryDocumentAsync(DocFile file, Instruction instruction) {
+        return queryDocumentAsync(file, instruction, QueryOptions.builder().build());
+    }
+
+    /**
+     * Uploads one document with an instruction and options and returns its
+     * extraction result as a {@link CompletableFuture}. The same request, the
+     * same decode and the same exceptions as the synchronous call; nothing
+     * retries: calls are paid (D-05).
+     *
+     * <p>The {@code null} checks throw {@link NullPointerException}
+     * synchronously; every other failure — pre-send validation included —
+     * completes the future exceptionally instead, with the same exception
+     * class the synchronous call would throw. Cancelling the returned future
+     * cancels the underlying exchange; the client stays usable.
+     *
+     * @throws NullPointerException if file, instruction or options is null
+     */
+    public CompletableFuture<QueryResult> queryDocumentAsync(DocFile file, Instruction instruction,
+            QueryOptions options) {
+        Objects.requireNonNull(file, "file");
+        Objects.requireNonNull(instruction, "instruction");
+        Objects.requireNonNull(options, "options");
+
+        PreparedRequest prepared;
+        try {
+            prepared = prepare(file, instruction, options);
+        } catch (RuntimeException e) {
+            return CompletableFuture.failedFuture(e);
+        }
+
+        // A fresh future completed by hand (never thenApply on the JDK
+        // future, whose CompletionException would wrap the SDK exception a
+        // second time, T-13-15): transport failures map to the SDK's
+        // exception family, decode results and decode failures complete the
+        // future with the very instances the sync call returns or throws.
+        CompletableFuture<QueryResult> result = new CompletableFuture<>();
+        CompletableFuture<HttpResponse<byte[]>> http =
+                httpClient.sendAsync(prepared.request(), BoundedBodySubscriber.handler());
+        http.whenComplete((response, failure) -> {
+            if (failure != null) {
+                result.completeExceptionally(Transport.mapFailure(failure, prepared.fileLength(),
+                        apiKey, host, timeout, sdkBuiltClient));
+                return;
+            }
+            try {
+                result.complete(decode(response));
+            } catch (RuntimeException e) {
+                result.completeExceptionally(e);
+            }
+        });
+        result.whenComplete((unused, failure) -> {
+            if (result.isCancelled()) {
+                http.cancel(true);
+            }
+        });
+        return result;
+    }
+
+    /** One prepared request: the framed HttpRequest and the file length (the size-hint input). */
+    private record PreparedRequest(HttpRequest request, long fileLength) {
+    }
+
+    /**
+     * Every client-side check and the whole framing of one call (D-02, D-03):
+     * the strict filename rule, the regular-file check, the file length, and
+     * the byte-exact multipart request. Shared by the synchronous and the
+     * asynchronous call so both send identical requests.
+     */
+    private PreparedRequest prepare(DocFile file, Instruction instruction, QueryOptions options) {
         Objects.requireNonNull(file, "file");
         Objects.requireNonNull(instruction, "instruction");
         Objects.requireNonNull(options, "options");
@@ -179,16 +282,16 @@ public final class DocQL {
                         HttpRequest.BodyPublishers.ofByteArray(epilogue)))
                 .build();
 
-        HttpResponse<byte[]> response;
-        try {
-            response = httpClient.send(request, BoundedBodySubscriber.handler());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new DocQLConnectionException(Decoder.scrub("interrupted", apiKey), e);
-        } catch (IOException e) {
-            throw Transport.mapFailure(e, fileLength, apiKey, host, timeout, sdkBuiltClient);
-        }
+        return new PreparedRequest(request, fileLength);
+    }
 
+    /**
+     * The response decode shared by both paths (D-04, D-06, D-21): a usable
+     * 2xx body becomes a {@link QueryResult}; an over-cap 2xx body or any
+     * other status throws the {@link DocQLException} the sync call throws and
+     * the async future completes with.
+     */
+    private QueryResult decode(HttpResponse<byte[]> response) {
         int status = response.statusCode();
         byte[] body = response.body();
         if (status / 100 == 2) {
@@ -202,23 +305,6 @@ public final class DocQL {
         // Every other status decodes as an error, 3xx included (D-09): the
         // key never leaves the configured host on a redirect.
         throw Decoder.decodeError(status, response.headers(), body, apiKey);
-    }
-
-    /**
-     * Compile-only stub for the 13-04 RED phase: the async surface does not
-     * exist yet, so every call fails until the GREEN commit implements it.
-     */
-    public CompletableFuture<QueryResult> queryDocumentAsync(DocFile file, Instruction instruction) {
-        throw new UnsupportedOperationException("queryDocumentAsync is implemented in the 13-04 GREEN commit");
-    }
-
-    /**
-     * Compile-only stub for the 13-04 RED phase: the async surface does not
-     * exist yet, so every call fails until the GREEN commit implements it.
-     */
-    public CompletableFuture<QueryResult> queryDocumentAsync(DocFile file, Instruction instruction,
-            QueryOptions options) {
-        throw new UnsupportedOperationException("queryDocumentAsync is implemented in the 13-04 GREEN commit");
     }
 
     /**
