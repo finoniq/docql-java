@@ -23,6 +23,15 @@ final class Transport {
 
     static RuntimeException mapFailure(Throwable failure, long fileLength, String key,
             String host, Duration timeout) {
+        return mapFailure(failure, fileLength, key, host, timeout, true);
+    }
+
+    /**
+     * Compile stub for the RED commit — the SDK-built/injected distinction
+     * arrives in the GREEN commit.
+     */
+    static RuntimeException mapFailure(Throwable failure, long fileLength, String key,
+            String host, Duration timeout, boolean sdkBuiltClient) {
         Throwable t = failure;
         while ((t instanceof CompletionException || t instanceof ExecutionException)
                 && t.getCause() != null) {
