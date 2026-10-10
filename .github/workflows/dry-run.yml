@@ -110,7 +110,7 @@ jobs:
           LOG="$RUNNER_TEMP/deploy.log"
           ./mvnw -B -ntp -P release -DskipITs deploy "-Ddocql.deploymentName=docql $VERSION DRY RUN - drop" 2>&1 | tee "$LOG"
           deploy_rc=${PIPESTATUS[0]}
-          id=$(sed -nE 's/^.*deploymentId: ([0-9a-f]{16,64})\..*$/\1/p' "$LOG" | tail -n 1)
+          id=$(sed -nE 's/^.*deploymentId: ([0-9a-f-]{36})\..*$/\1/p' "$LOG" | tail -n 1)
           if [ -z "$id" ]; then
             echo "DRY_RUN_DROP_MANUAL"
             if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then

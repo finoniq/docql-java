@@ -153,7 +153,7 @@ jobs:
         run: |
           set -euo pipefail
           ./mvnw -B -ntp -P release -DskipITs deploy 2>&1 | tee "$RUNNER_TEMP/deploy.log"
-          id=$(sed -nE 's/^.*deploymentId: ([0-9a-f]{16,64})\..*$/\1/p' "$RUNNER_TEMP/deploy.log" | tail -n 1)
+          id=$(sed -nE 's/^.*deploymentId: ([0-9a-f-]{36})\..*$/\1/p' "$RUNNER_TEMP/deploy.log" | tail -n 1)
           {
             echo "### Deployment VALIDATED — nothing is published yet"
             echo
