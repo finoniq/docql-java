@@ -7,6 +7,7 @@ import java.net.http.HttpHeaders;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -30,6 +31,10 @@ public final class DocQL {
     static final String ENV_API_KEY = "DOCQL_API_KEY";
     static final String ENV_API_URL = "DOCQL_API_URL";
     static final String QUERY_PATH = "/v1/query-document";
+    /** The URL validation message; the URL itself is never echoed (D-01). */
+    static final String INVALID_URL_MESSAGE =
+            "apiUrl must be an http:// or https:// URL without credentials, query or fragment: "
+                    + "pass apiUrl(...) or set DOCQL_API_URL";
     /** The per-request deadline: it covers the upload until the response headers arrive (D-07). */
     static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(660);
     /** Bounds dial and TLS handshake on the client the SDK builds itself (D-09). */
@@ -156,6 +161,15 @@ public final class DocQL {
                 + "; " + System.getProperty("os.name") + "/" + System.getProperty("os.arch") + ")";
     }
 
+    /**
+     * The masked identity of this client (D-12): the API URL and timeout
+     * only — the API key never appears in any string form.
+     */
+    @Override
+    public String toString() {
+        return "DocQL{apiUrl=" + apiUrl + ", apiKey=***, timeout=" + timeout + "}";
+    }
+
     private static String headerRequestId(HttpHeaders headers) {
         String value = headers.firstValue("x-request-id").orElse(null);
         return value == null || value.isEmpty() ? null : value;
@@ -199,24 +213,25 @@ public final class DocQL {
         /**
          * Sets the API key used for every call.
          *
-         * @param apiKey the key; must not be null at build time
+         * @param apiKey the key; must not be null (the value is trimmed and
+         *        validated at build time)
          * @return this builder
          */
         public Builder apiKey(String apiKey) {
-            this.apiKey = apiKey;
+            this.apiKey = Objects.requireNonNull(apiKey, "apiKey");
             return this;
         }
 
         /**
          * Sets the API base URL, e.g. {@code "https://api-docql.finoniq.com"};
-         * a trailing slash is stripped and {@code http://} is allowed for the
-         * stub.
+         * trailing slashes are stripped and {@code http://} is allowed for
+         * the stub.
          *
-         * @param apiUrl the base URL
+         * @param apiUrl the base URL; must not be null
          * @return this builder
          */
         public Builder apiUrl(String apiUrl) {
-            this.apiUrl = apiUrl;
+            this.apiUrl = Objects.requireNonNull(apiUrl, "apiUrl");
             return this;
         }
 
@@ -229,19 +244,21 @@ public final class DocQL {
          * @return this builder
          */
         public Builder timeout(Duration timeout) {
-            this.timeout = timeout;
+            this.timeout = Objects.requireNonNull(timeout, "timeout");
             return this;
         }
 
         /**
          * Injects a caller-owned {@link HttpClient} to send the requests
-         * with. Recorded verbatim; build() applies the redirect policy (D-10).
+         * with. The client must use {@link HttpClient.Redirect#NEVER} — the
+         * JDK strips only {@code Authorization} on cross-host redirects, not
+         * {@code X-API-Key}, so {@code build()} fails fast otherwise (D-10).
          *
          * @param httpClient the client to inject; must not be null
          * @return this builder
          */
         public Builder httpClient(HttpClient httpClient) {
-            this.httpClient = httpClient;
+            this.httpClient = Objects.requireNonNull(httpClient, "httpClient");
             return this;
         }
 
@@ -257,15 +274,98 @@ public final class DocQL {
             return this;
         }
 
-        /** Builds the immutable client. */
+        /**
+         * Builds the immutable client. Resolution order per value: explicit
+         * builder value, then the environment ({@code DOCQL_API_KEY} /
+         * {@code DOCQL_API_URL}; a whitespace-only value counts as unset),
+         * then the production default for the URL. Fails fast before any
+         * network contact when no usable key or URL can be resolved (D-01).
+         */
         public DocQL build() {
-            String key = apiKey;
-            String url = apiUrl != null ? apiUrl : DEFAULT_API_URL;
+            return new DocQL(resolveKey(), resolveUrl(), resolveTimeout(),
+                    httpClient != null ? validateClient(httpClient) : sdkClient(),
+                    boundarySupplier);
+        }
+
+        private String resolveKey() {
+            if (apiKey != null) {
+                String trimmed = apiKey.trim();
+                if (trimmed.isEmpty()) {
+                    throw new IllegalArgumentException(
+                            "API key missing: the explicitly given apiKey(...) value is empty; "
+                                    + "pass apiKey(...) or set DOCQL_API_KEY");
+                }
+                return requireNoControlChars(trimmed);
+            }
+            String fromEnv = envLookup.apply(ENV_API_KEY);
+            String trimmed = fromEnv == null ? "" : fromEnv.trim();
+            if (trimmed.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "API key missing: pass apiKey(...) or set DOCQL_API_KEY");
+            }
+            return requireNoControlChars(trimmed);
+        }
+
+        /** Rejects control characters without ever echoing the key value. */
+        private static String requireNoControlChars(String key) {
+            for (int i = 0; i < key.length(); i++) {
+                char c = key.charAt(i);
+                if (c < 0x20 || c == 0x7F) {
+                    throw new IllegalArgumentException(
+                            "API key contains control characters (DOCQL_API_KEY)");
+                }
+            }
+            return key;
+        }
+
+        private String resolveUrl() {
+            String raw;
+            if (apiUrl != null) {
+                if (apiUrl.trim().isEmpty()) {
+                    throw new IllegalArgumentException(INVALID_URL_MESSAGE);
+                }
+                raw = apiUrl;
+            } else {
+                raw = envLookup.apply(ENV_API_URL);
+                if (raw == null || raw.trim().isEmpty()) {
+                    raw = DEFAULT_API_URL;
+                }
+            }
+            URI uri;
+            try {
+                uri = URI.create(raw);
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException(INVALID_URL_MESSAGE);
+            }
+            String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
+            if ((!scheme.equals("http") && !scheme.equals("https"))
+                    || uri.getHost() == null || uri.getHost().isEmpty()
+                    || uri.getUserInfo() != null
+                    || uri.getRawQuery() != null
+                    || uri.getRawFragment() != null) {
+                throw new IllegalArgumentException(INVALID_URL_MESSAGE);
+            }
+            String url = raw;
             while (url.endsWith("/")) {
                 url = url.substring(0, url.length() - 1);
             }
-            Duration deadline = timeout != null ? timeout : DEFAULT_TIMEOUT;
-            return new DocQL(key, url, deadline, sdkClient(), boundarySupplier);
+            return url;
+        }
+
+        private Duration resolveTimeout() {
+            if (timeout != null && (timeout.isZero() || timeout.isNegative())) {
+                throw new IllegalArgumentException("timeout must be greater than zero");
+            }
+            return timeout != null ? timeout : DEFAULT_TIMEOUT;
+        }
+
+        private static HttpClient validateClient(HttpClient injected) {
+            if (injected.followRedirects() != HttpClient.Redirect.NEVER) {
+                throw new IllegalArgumentException(
+                        "the injected HttpClient must use Redirect.NEVER"
+                                + " (the SDK never forwards X-API-Key on a redirect)");
+            }
+            return injected;
         }
     }
 }
