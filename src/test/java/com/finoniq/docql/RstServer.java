@@ -152,6 +152,11 @@ final class RstServer {
     static Script respondAndMeasure(byte[] headerBytes, byte[] body) {
         return socket -> {
             drain(socket, contentLength(readHeaders(socket)));
+            // Scope the measurement to THIS script: measuredBodyBytes is static and
+            // keeps the previous test's value, which awaitMeasuredBodyBytes would
+            // otherwise return before this script ever publishes (a stale partial
+            // write can mask a regression where the client never cancels).
+            measuredBodyBytes = -1;
             OutputStream out = socket.getOutputStream();
             out.write(headerBytes);
             out.flush();
