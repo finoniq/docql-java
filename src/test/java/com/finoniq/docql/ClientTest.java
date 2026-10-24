@@ -131,6 +131,38 @@ class ClientTest {
         assertFalse(e.getMessage().contains(control), "the key value is never echoed: " + e.getMessage());
     }
 
+    /**
+     * WR-01: a key with a character above U+00FF is rejected at build(),
+     * explicit or from the environment, before any request exists, so the
+     * JDK header validator (whose message echoes the value) never sees it.
+     */
+    @Test
+    void nonLatin1KeyRejectedWithoutEcho() {
+        List<String> keys = List.of("dql_k\u0E01ey", "dql_\uFEFFkey", "a\u0001b\u0E01", "\u0E01a\u0001b");
+        for (String key : keys) {
+            IllegalArgumentException explicit = assertThrows(IllegalArgumentException.class,
+                    () -> builder(Map.of()).apiKey(key).apiUrl(server.url()).build(), "explicit key");
+            assertNoEcho(explicit, key);
+            IllegalArgumentException fromEnv = assertThrows(IllegalArgumentException.class,
+                    () -> builder(Map.of("DOCQL_API_KEY", key)).apiUrl(server.url()).build(), "env key");
+            assertNoEcho(fromEnv, key);
+        }
+        assertEquals(0, server.requestCount(), "no request is sent for a rejected key");
+
+        DocQL ascii = builder(Map.of()).apiKey("dql_ascii-key").apiUrl(server.url()).build();
+        sendOne(ascii);
+        assertEquals("dql_ascii-key", server.requests().get(0).header("X-API-Key"));
+    }
+
+    private static void assertNoEcho(IllegalArgumentException e, String key) {
+        String message = e.getMessage();
+        assertTrue(message.contains("DOCQL_API_KEY"), message);
+        assertFalse(message.contains(key), "the key value is never echoed: " + message);
+        assertFalse(message.contains("\u0E01"), "no key character is echoed: " + message);
+        assertFalse(message.contains("\uFEFF"), "no key character is echoed: " + message);
+        assertFalse(message.contains("dql_"), "no key fragment is echoed: " + message);
+    }
+
     @Test
     void invalidUrlRejected() {
         List<String> bad = List.of(
