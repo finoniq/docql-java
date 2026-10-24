@@ -40,9 +40,12 @@ jobs:
       - name: jar shape (major 61, Automatic-Module-Name, sources + javadoc jars)
         run: |
           set -euo pipefail
-          test -s target/docql-0.1.0-sources.jar
-          test -s target/docql-0.1.0-javadoc.jar
-          python3 -c "import zipfile; z = zipfile.ZipFile('target/docql-0.1.0.jar'); assert 'Automatic-Module-Name: com.finoniq.docql' in z.read('META-INF/MANIFEST.MF').decode(), 'the main jar manifest must carry Automatic-Module-Name: com.finoniq.docql'; assert z.read('com/finoniq/docql/DocQL.class')[6:8] == bytes([0, 61]), 'DocQL.class must be bytecode major version 61 (--release 17)'"
+          VERSION=$(sed -n 's/^.*String VERSION = "\([^"]*\)".*/\1/p' \
+            src/main/java/com/finoniq/docql/DocQL.java | head -n 1)
+          test -n "$VERSION"
+          test -s "target/docql-$VERSION-sources.jar"
+          test -s "target/docql-$VERSION-javadoc.jar"
+          python3 -c "import zipfile; z = zipfile.ZipFile('target/docql-$VERSION.jar'); assert 'Automatic-Module-Name: com.finoniq.docql' in z.read('META-INF/MANIFEST.MF').decode(), 'the main jar manifest must carry Automatic-Module-Name: com.finoniq.docql'; assert z.read('com/finoniq/docql/DocQL.class')[6:8] == bytes([0, 61]), 'DocQL.class must be bytecode major version 61 (--release 17)'"
           echo "jar shape ok: sources + javadoc jars present, DocQL.class major 61, Automatic-Module-Name: com.finoniq.docql"
 
   unit:

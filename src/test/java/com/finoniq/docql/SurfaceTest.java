@@ -28,6 +28,68 @@ class SurfaceTest {
 
     private static final String PACKAGE = "com.finoniq.docql";
 
+    /**
+     * The v0.1.0 pinned public types and their public declared methods,
+     * copied from the v0.1.0 publicSurface and frozen: later releases may add
+     * surface, never remove it (JSDK-03).
+     */
+    private static final Map<String, Set<String>> V01_SURFACE = v01Surface();
+
+    private static Map<String, Set<String>> v01Surface() {
+        Map<String, Set<String>> v01 = new TreeMap<>();
+        v01.put("DocQL", Set.of("builder()", "queryDocument(DocFile,Instruction)",
+                "queryDocument(DocFile,Instruction,QueryOptions)", "queryDocumentAsync(DocFile,Instruction)",
+                "queryDocumentAsync(DocFile,Instruction,QueryOptions)", "toString()"));
+        v01.put("DocQL$Builder", Set.of("apiKey(String)", "apiUrl(String)", "timeout(Duration)",
+                "httpClient(HttpClient)", "build()"));
+        v01.put("DocFile", Set.of("bytes(byte[],String)", "path(Path)", "stream(InputStream,long,String)"));
+        v01.put("Instruction", Set.of("query(String)", "prompt(String)"));
+        v01.put("Mode", Set.of("of(String)", "value()", "equals(Object)", "hashCode()", "toString()"));
+        v01.put("QueryOptions", Set.of("builder()"));
+        v01.put("QueryOptions$Builder", Set.of("mode(Mode)", "filename(String)", "build()"));
+        v01.put("Reasons", Set.of());
+        v01.put("QueryResult", Set.of("data()", "requestId()", "pageCount()", "pagesOcr()", "metadata()"));
+        v01.put("DocQLException", Set.of("status()", "reason()", "requestId()", "retryAfter()",
+                "retryable()", "serverMessage()", "body()", "getMessage()"));
+        v01.put("DocQLConnectionException", Set.of());
+        v01.put("DocQLTimeoutException", Set.of());
+        return v01;
+    }
+
+    /** JSDK-03: every v0.1.0 pinned type and method is still public in target/classes. */
+    @Test
+    void v01SurfaceIsASubset() throws Exception {
+        Path dir = Path.of("target", "classes", "com", "finoniq", "docql");
+        assertTrue(Files.isDirectory(dir), "target/classes missing; run from the repo root");
+        for (Map.Entry<String, Set<String>> entry : V01_SURFACE.entrySet()) {
+            String simple = entry.getKey();
+            assertTrue(Files.isRegularFile(dir.resolve(simple + ".class")), simple + ".class missing");
+            Class<?> cls = Class.forName(PACKAGE + "." + simple);
+            assertTrue(Modifier.isPublic(cls.getModifiers()), simple + " must stay public");
+            Set<String> got = new TreeSet<>();
+            for (Method method : cls.getDeclaredMethods()) {
+                if (!method.isSynthetic() && !method.isBridge() && Modifier.isPublic(method.getModifiers())) {
+                    got.add(signature(method));
+                }
+            }
+            for (String method : entry.getValue()) {
+                assertTrue(got.contains(method), simple + "." + method + " is v0.1 surface and must stay");
+            }
+        }
+    }
+
+    private static String signature(Method method) {
+        StringBuilder signature = new StringBuilder(method.getName()).append('(');
+        Class<?>[] params = method.getParameterTypes();
+        for (int i = 0; i < params.length; i++) {
+            if (i > 0) {
+                signature.append(',');
+            }
+            signature.append(params[i].getSimpleName());
+        }
+        return signature.append(')').toString();
+    }
+
     @Test
     void publicSurface() throws Exception {
         Path dir = Path.of("target", "classes", "com", "finoniq", "docql");

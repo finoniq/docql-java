@@ -508,7 +508,7 @@ public final class DocQL {
                             "API key missing: the explicitly given apiKey(...) value is empty; "
                                     + "pass apiKey(...) or set DOCQL_API_KEY");
                 }
-                return requireNoControlChars(trimmed);
+                return requireWireSafe(trimmed);
             }
             String fromEnv = envLookup.apply(ENV_API_KEY);
             String trimmed = fromEnv == null ? "" : fromEnv.trim();
@@ -516,16 +516,25 @@ public final class DocQL {
                 throw new IllegalArgumentException(
                         "API key missing: pass apiKey(...) or set DOCQL_API_KEY");
             }
-            return requireNoControlChars(trimmed);
+            return requireWireSafe(trimmed);
         }
 
-        /** Rejects control characters without ever echoing the key value. */
-        private static String requireNoControlChars(String key) {
+        /**
+         * Rejects characters the wire cannot carry — control characters and
+         * anything above U+00FF, which the JDK header validator would reject
+         * with a message that echoes the value (WR-01) — without ever echoing
+         * the key value.
+         */
+        private static String requireWireSafe(String key) {
             for (int i = 0; i < key.length(); i++) {
                 char c = key.charAt(i);
                 if (c < 0x20 || c == 0x7F) {
                     throw new IllegalArgumentException(
                             "API key contains control characters (DOCQL_API_KEY)");
+                }
+                if (c > 0xFF) {
+                    throw new IllegalArgumentException(
+                            "API key contains non-Latin-1 characters the HTTP header cannot carry (DOCQL_API_KEY)");
                 }
             }
             return key;

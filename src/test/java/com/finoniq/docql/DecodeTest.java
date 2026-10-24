@@ -149,6 +149,71 @@ class DecodeTest {
         }
     }
 
+    /** Decodes one vendored decode case through the SDK's decoder. */
+    private static DocQLException decodeCase(JsonNode c) {
+        Map<String, String> headers = new LinkedHashMap<>();
+        for (Map.Entry<String, JsonNode> header : c.path("headers").properties()) {
+            headers.put(header.getKey(), header.getValue().asText());
+        }
+        byte[] body = c.path("bodyUtf8").asText("").getBytes(StandardCharsets.UTF_8);
+        return decode(c.path("status").asInt(), headers, body, TEST_KEY);
+    }
+
+    /**
+     * JSDK-05: every 429 and 503 decode case of both vendored kits is
+     * retryable, and retryAfter() is the case's retry-after header in
+     * seconds, or null when the case carries none.
+     */
+    @Test
+    void retryAfterOn429And503() {
+        int seen = 0;
+        for (JsonNode kit : List.of(Kit.sdkCases(), Kit.jobCases())) {
+            for (JsonNode c : kit.path("decodeCases")) {
+                int status = c.path("status").asInt();
+                if (status != 429 && status != 503) {
+                    continue;
+                }
+                String id = c.path("id").asText();
+                DocQLException e = decodeCase(c);
+                assertTrue(e.retryable(), id + ": retryable");
+                JsonNode header = c.path("headers").path("retry-after");
+                Duration want = header.isTextual() ? Duration.ofSeconds(Long.parseLong(header.asText())) : null;
+                assertEquals(want, e.retryAfter(), id + ": retryAfter");
+                seen++;
+            }
+        }
+        assertEquals(7, seen, "the kits carry seven 429/503 decode cases");
+    }
+
+    /**
+     * Every job-cases.json decode case with an error status decodes to its
+     * expected status, reason (null for the jobs-off 404 and the 405) and
+     * request id; retryable only for 429 and 503.
+     */
+    @Test
+    void jobErrorDecodeCases() {
+        int seen = 0;
+        for (JsonNode c : Kit.jobCases().path("decodeCases")) {
+            int status = c.path("status").asInt();
+            if (status < 400) {
+                continue;
+            }
+            String id = c.path("id").asText();
+            DocQLException e = decodeCase(c);
+            JsonNode expect = c.path("expect");
+            assertEquals(expect.path("status").asInt(), e.status(), id + ": status");
+            JsonNode wantReason = expect.path("reason");
+            assertEquals(wantReason.isMissingNode() || wantReason.isNull() ? null : wantReason.asText(),
+                    e.reason(), id + ": reason");
+            JsonNode wantId = expect.path("requestId");
+            assertEquals(wantId.isMissingNode() || wantId.isNull() ? null : wantId.asText(),
+                    e.requestId(), id + ": requestId");
+            assertEquals(status == 429 || status == 503, e.retryable(), id + ": retryable");
+            seen++;
+        }
+        assertTrue(seen >= 10, "job-cases.json carries at least ten error decode cases, saw " + seen);
+    }
+
     @Test
     void retryableOnlyFor429And503() {
         Map<Integer, Boolean> expected = Map.of(
