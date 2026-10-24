@@ -61,7 +61,7 @@ import static org.junit.jupiter.api.Assertions.fail;
  */
 class ContractIT {
 
-    /** How much of /__stub/sdk-cases may be read for the kit check. */
+    /** How much of /__stub/sdk-cases or /__stub/job-cases may be read for the kit check. */
     private static final int KIT_READ_CAP = 1 << 20;
 
     /** The plain client of the kit check; it never carries the API key. */
@@ -561,16 +561,26 @@ class ContractIT {
     }
 
     /**
-     * The kit gate (T-13-19), run once per JVM: the sha256 of the bytes
-     * {@code GET /__stub/sdk-cases} serves (read capped at 1 MiB) must equal
-     * the sdk-cases.json entry of the vendored manifest and the vendored file
-     * itself. Any mismatch — or a non-200, over-cap body, or an unreachable
-     * stub — returns the failure detail that fails every stub-bound test
-     * under the {@code CONTRACT_KIT_MISMATCH:} prefix; it can fail, never
-     * silently skip.
+     * The kit gate (T-13-19), run once per JVM: for each kit file the stub
+     * serves — {@code GET /__stub/sdk-cases} for sdk-cases.json and
+     * {@code GET /__stub/job-cases} for job-cases.json — the sha256 of the
+     * served bytes (read capped at 1 MiB) must equal that file's entry in the
+     * vendored manifest and the vendored file itself. Any mismatch — or a
+     * non-200, over-cap body, or an unreachable stub — returns the failure
+     * detail, naming the file, that fails every stub-bound test under the
+     * {@code CONTRACT_KIT_MISMATCH:} prefix; it can fail, never silently skip.
      */
     private static String verifyKit(String stubBase) {
-        HttpRequest request = HttpRequest.newBuilder(URI.create(stubBase + "/__stub/sdk-cases"))
+        String sdk = verifyKitFile(stubBase, "/__stub/sdk-cases", "sdk-cases.json");
+        if (sdk != null) {
+            return sdk;
+        }
+        return verifyKitFile(stubBase, "/__stub/job-cases", "job-cases.json");
+    }
+
+    /** One served-manifest-vendored sha256 check; null when all three agree. */
+    private static String verifyKitFile(String stubBase, String route, String file) {
+        HttpRequest request = HttpRequest.newBuilder(URI.create(stubBase + route))
                 .timeout(Duration.ofSeconds(30))
                 .GET()
                 .build();
@@ -578,32 +588,32 @@ class ContractIT {
         try {
             response = GATE_CLIENT.send(request, HttpResponse.BodyHandlers.ofInputStream());
         } catch (IOException e) {
-            return "GET " + stubBase + "/__stub/sdk-cases: " + e.getClass().getSimpleName();
+            return file + ": GET " + stubBase + route + ": " + e.getClass().getSimpleName();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            return "GET " + stubBase + "/__stub/sdk-cases: interrupted";
+            return file + ": GET " + stubBase + route + ": interrupted";
         }
         try (InputStream body = response.body()) {
             if (response.statusCode() != 200) {
-                return "GET /__stub/sdk-cases: HTTP " + response.statusCode();
+                return file + ": GET " + route + ": HTTP " + response.statusCode();
             }
             byte[] served = body.readNBytes(KIT_READ_CAP + 1);
             if (served.length > KIT_READ_CAP) {
-                return "/__stub/sdk-cases exceeds the " + KIT_READ_CAP + "-byte read cap";
+                return file + ": " + route + " exceeds the " + KIT_READ_CAP + "-byte read cap";
             }
             String servedSha = sha256Hex(served);
-            String declared = Kit.manifestFiles().path("sdk-cases.json").asText(null);
+            String declared = Kit.manifestFiles().path(file).asText(null);
             if (declared == null || declared.isEmpty()) {
-                return "contract/manifest.json carries no sdk-cases.json entry";
+                return "contract/manifest.json carries no " + file + " entry";
             }
-            String vendoredSha = sha256Hex(Files.readAllBytes(Path.of("contract", "sdk-cases.json")));
+            String vendoredSha = sha256Hex(Files.readAllBytes(Path.of("contract", file)));
             if (!servedSha.equals(declared) || !servedSha.equals(vendoredSha)) {
-                return "sdk-cases.json sha256 mismatch: served " + servedSha
+                return file + " sha256 mismatch: served " + servedSha
                         + ", manifest " + declared + ", vendored " + vendoredSha;
             }
             return null;
         } catch (IOException e) {
-            return "read /__stub/sdk-cases: " + e.getClass().getSimpleName();
+            return file + ": read " + route + ": " + e.getClass().getSimpleName();
         }
     }
 

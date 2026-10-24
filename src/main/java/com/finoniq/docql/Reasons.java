@@ -2,9 +2,11 @@ package com.finoniq.docql;
 
 /**
  * The DocQL reasons (D-04): the SDK spelling of the stub REASON_TEXTS plus
- * the gateway ERROR_CLASSES. {@link DocQLException#reason()} carries these
- * values; classification is by status, never by body shape. Constants can be
- * added in a later release, never removed or renamed.
+ * the gateway ERROR_CLASSES and the job reasons: the non-null reasons of the
+ * contract kit files sdk-cases.json and job-cases.json.
+ * {@link DocQLException#reason()} carries these values; classification is by
+ * status, never by body shape. Constants can be added in a later release,
+ * never removed or renamed.
  */
 public final class Reasons {
 
@@ -52,4 +54,28 @@ public final class Reasons {
 
     /** The 502 reason for a gateway-to-upstream auth failure. */
     public static final String UPSTREAM_AUTH_FAILED = "upstream_auth_failed";
+
+    /** The 429 reason for a key over its concurrent-request limit. */
+    public static final String CONCURRENCY_LIMIT_EXCEEDED = "concurrency_limit_exceeded";
+
+    /** The 429 reason for a key over its request-rate limit. */
+    public static final String RATE_LIMIT_EXCEEDED = "rate_limit_exceeded";
+
+    /** The 404 reason for a job id that is unknown to this account. */
+    public static final String JOB_NOT_FOUND = "job_not_found";
+
+    /** The 404 reason for a job whose result has expired. */
+    public static final String JOB_EXPIRED = "job_expired";
+
+    /** The 429 reason for a full job queue; retry after the Retry-After delay. */
+    public static final String QUEUE_FULL = "queue_full";
+
+    /** The 422 reason for an Idempotency-Key reused with a different request. */
+    public static final String IDEMPOTENCY_KEY_CONFLICT = "idempotency_key_conflict";
+
+    /** The 409 reason for an Idempotency-Key whose first request is still in progress. */
+    public static final String IDEMPOTENCY_IN_PROGRESS = "idempotency_in_progress";
+
+    /** The 503 reason for a job interrupted before it could complete. */
+    public static final String JOB_INTERRUPTED = "job_interrupted";
 }
