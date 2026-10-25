@@ -345,8 +345,8 @@ public final class DocQL {
      *         ({@link DocQLException#retryable()} false), or a 401, a 404 and
      *         any other non-retried status, always with
      *         {@link DocQLException#jobId()} set
-     * @throws DocQLWaitTimeoutException when the next sleep would pass the
-     *         deadline
+     * @throws DocQLWaitTimeoutException when the deadline comes before the
+     *         job finishes; no poll is ever sent at or past it
      * @throws DocQLConnectionException when the waiting thread is
      *         interrupted; the interrupt flag is set again
      */
@@ -369,8 +369,8 @@ public final class DocQL {
      *         ({@link DocQLException#retryable()} false), or a 401, a 404 and
      *         any other non-retried status, always with
      *         {@link DocQLException#jobId()} set
-     * @throws DocQLWaitTimeoutException when the next sleep would reach or
-     *         pass the deadline
+     * @throws DocQLWaitTimeoutException when the deadline comes before the
+     *         job finishes; no poll is ever sent at or past it
      * @throws DocQLConnectionException when the waiting thread is
      *         interrupted; the interrupt flag is set again
      */

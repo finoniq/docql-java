@@ -40,7 +40,10 @@ import java.util.Map;
  * {@code failed} throws the job's {@link DocQLException} (job id set, not
  * retryable).</li>
  * <li>OD-5: the wait gives up when the next sleep would pass the deadline
- * (15 minutes by default) and throws {@link DocQLWaitTimeoutException}.</li>
+ * (15 minutes by default) and throws {@link DocQLWaitTimeoutException}. It
+ * never polls at or past the deadline: a sleep that ends exactly on it ends
+ * the wait too (as in Go; Python and the kit runner poll once more at that
+ * instant, an edge no kit case reaches).</li>
  * </ul>
  * The wait never cancels the job, on any path, interrupts included.
  */
@@ -417,6 +420,12 @@ final class Jobs {
                 client.sleeper().sleep(sleep);
             } catch (InterruptedException e) {
                 throw interrupted(jobId, apiKey, e);
+            }
+            // A sleep that ends exactly on the deadline (or overshoots it)
+            // leaves no time for a poll: never poll at or past the deadline
+            // (26-07 found the same edge in Go).
+            if (saturatedSubtract(deadline, client.nanoClock().getAsLong()) <= 0) {
+                throw new DocQLWaitTimeoutException(jobId, timeout, apiKey);
             }
         }
     }
