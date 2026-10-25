@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.net.http.HttpHeaders;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -217,13 +218,15 @@ final class Decoder {
         return text.substring(0, text.offsetByCodePoints(0, max));
     }
 
-    private static DocQLException unusable(int status, HttpHeaders headers, byte[] body,
+    /** The DocQLException of a 2xx body the SDK cannot use: not retryable, no reason. */
+    static DocQLException unusable(int status, HttpHeaders headers, byte[] body,
             String key, String message) {
         return new DocQLException(status, null, headerRequestId(headers, key), null, false,
                 message, scrubAndTruncate(body, key));
     }
 
-    private static JsonNode parseTree(byte[] body) {
+    /** Parses one JSON value on the SDK's private mapper; null when the bytes are not JSON. */
+    static JsonNode parseTree(byte[] body) {
         try {
             return MAPPER.readTree(body);
         } catch (IOException e) {
@@ -231,7 +234,20 @@ final class Decoder {
         }
     }
 
-    private static Integer jsonInt(JsonNode metadata, String field) {
+    /**
+     * Serializes a parsed subtree back to JSON bytes on the private mapper,
+     * so an embedded result or error object goes through the same decode as
+     * a top-level answer.
+     */
+    static byte[] toJsonBytes(JsonNode node) {
+        try {
+            return MAPPER.writeValueAsBytes(node);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    static Integer jsonInt(JsonNode metadata, String field) {
         JsonNode value = metadata.get(field);
         if (value != null && value.isIntegralNumber() && value.canConvertToInt()) {
             return value.intValue();
@@ -244,7 +260,7 @@ final class Decoder {
     }
 
     /** The sanitised {@code x-request-id} header value, or null when absent or empty. */
-    private static String headerRequestId(HttpHeaders headers, String key) {
+    static String headerRequestId(HttpHeaders headers, String key) {
         String value = headerValue(headers, "x-request-id");
         return value == null || value.isEmpty() ? null : sanitise(value, key);
     }

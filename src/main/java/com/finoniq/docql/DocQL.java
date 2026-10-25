@@ -13,10 +13,13 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Locale;
+import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 /**
@@ -28,6 +31,12 @@ import java.util.function.Supplier;
  * {@code DOCQL_API_KEY} / {@code DOCQL_API_URL} fallback, or the production
  * default URL. A {@code DocQL} client is immutable and thread-safe. It needs
  * no closing. Calls are paid: nothing here retries.
+ *
+ * <p>Long documents run as async jobs (JSDK-01):
+ * {@link #submitDocument(DocFile, Instruction)} answers at once with a
+ * {@link Job}, {@link #getJob(String)} reads it again, and
+ * {@link #waitFor(String)} polls it until it finishes. Polling is free; only
+ * the submit is paid.
  */
 public final class DocQL {
 
@@ -64,9 +73,12 @@ public final class DocQL {
     private final HttpClient httpClient;
     private final boolean sdkBuiltClient;
     private final Supplier<String> boundarySupplier;
+    private final Jobs.Sleeper sleeper;
+    private final LongSupplier nanoClock;
 
     private DocQL(String apiKey, String apiUrl, Duration timeout, HttpClient httpClient,
-            boolean sdkBuiltClient, Supplier<String> boundarySupplier) {
+            boolean sdkBuiltClient, Supplier<String> boundarySupplier, Jobs.Sleeper sleeper,
+            LongSupplier nanoClock) {
         this.apiKey = apiKey;
         this.apiUrl = apiUrl;
         // Only the URI host ever names a failure: never user info, scheme or
@@ -76,6 +88,8 @@ public final class DocQL {
         this.httpClient = httpClient;
         this.sdkBuiltClient = sdkBuiltClient;
         this.boundarySupplier = boundarySupplier;
+        this.sleeper = sleeper;
+        this.nanoClock = nanoClock;
     }
 
     /**
@@ -228,6 +242,116 @@ public final class DocQL {
         return result;
     }
 
+    /**
+     * Submits one document with an instruction as an async job and returns
+     * the queued {@link Job} at once, with default options. See
+     * {@link #submitDocument(DocFile, Instruction, QueryOptions)}.
+     *
+     * @param file the document to extract from
+     * @param instruction what to extract
+     * @return the job as DocQL accepted it, with its idempotency key
+     * @throws NullPointerException if file or instruction is null
+     * @throws IllegalArgumentException if the effective file-part name would
+     *         be empty
+     * @throws DocQLException on every non-2xx response and an unusable 2xx,
+     *         carrying the idempotency key
+     * @throws DocQLConnectionException on a transport failure
+     * @throws DocQLTimeoutException when the request deadline expires
+     */
+    public Job submitDocument(DocFile file, Instruction instruction) {
+        return submitDocument(file, instruction, QueryOptions.builder().build());
+    }
+
+    /**
+     * Submits one document with an instruction and options as an async job
+     * ({@code POST /v1/jobs}) and returns the queued {@link Job} at once:
+     * poll it with {@link #getJob(String)} or block on it with
+     * {@link #waitFor(String)}. The request carries one
+     * {@code Idempotency-Key}, generated per call (32 random bytes,
+     * base64url); the returned Job and every error carry it, so a caller can
+     * resubmit with the same key and never create a second billable job
+     * (D-07, D-08). Every client-side check happens before a byte is sent.
+     *
+     * @param file the document to extract from
+     * @param instruction what to extract
+     * @param options per-call options
+     * @return the job as DocQL accepted it, with its idempotency key
+     * @throws NullPointerException if file, instruction or options is null
+     * @throws IllegalArgumentException if the effective file-part name would
+     *         be empty
+     * @throws DocQLException on every non-2xx response and an unusable 2xx,
+     *         carrying the idempotency key
+     * @throws DocQLConnectionException on a transport failure
+     * @throws DocQLTimeoutException when the request deadline expires
+     */
+    public Job submitDocument(DocFile file, Instruction instruction, QueryOptions options) {
+        Jobs.Upload upload = upload(file, instruction, options);
+        String key = Jobs.newIdempotencyKey();
+        Jobs.Answer answer;
+        try {
+            answer = Jobs.sendOnce(this, "POST", Jobs.JOBS_PATH, upload, List.of(key), timeout);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new DocQLConnectionException(Decoder.scrub("interrupted", apiKey), e);
+        }
+        if (!answer.ok()) {
+            DocQLException error = Decoder.decodeError(answer.status(), answer.headers(), answer.body(), apiKey);
+            throw error.withJob(null, key, error.retryable());
+        }
+        try {
+            return Jobs.parseJob(answer.status(), answer.headers(), answer.body(), apiKey, key);
+        } catch (DocQLException unusable) {
+            throw unusable.withJob(null, key, unusable.retryable());
+        }
+    }
+
+    /**
+     * Reads the job once ({@code GET /v1/jobs/{id}}) and returns it as
+     * answered: a failed job is returned with {@link Job#error()} set, not
+     * thrown. One request with a 30 s deadline; nothing retries.
+     *
+     * @param jobId the job id from {@link Job#jobId()}
+     * @return the job
+     * @throws IllegalArgumentException if jobId is null or empty (before any
+     *         request)
+     * @throws DocQLException on every non-2xx response (e.g. 404
+     *         {@code job_not_found}) and an unusable 2xx, with
+     *         {@link DocQLException#jobId()} set
+     * @throws DocQLConnectionException on a transport failure
+     * @throws DocQLTimeoutException when the 30 s deadline expires
+     */
+    public Job getJob(String jobId) {
+        return Jobs.fetch(this, jobId);
+    }
+
+    /**
+     * Polls the job until it succeeds or is cancelled and returns it, waiting
+     * at most 15 minutes. Each sleep is the answer's {@code Retry-After}
+     * clamped to [1, 30] s (1 s when absent); network errors, poll timeouts,
+     * 429 and 503 are retried with Retry-After or a 1, 2, 4, ... 30 s
+     * backoff; any other error is thrown at once. The job is never cancelled:
+     * not on a timeout, not on an interrupt.
+     *
+     * <p>Named {@code waitFor} because {@code wait} is final on
+     * {@link Object}.
+     *
+     * @param jobId the job id from {@link Job#jobId()}
+     * @return the succeeded or cancelled job
+     * @throws IllegalArgumentException if jobId is null or empty (before any
+     *         request)
+     * @throws DocQLException the job's own error when it failed
+     *         ({@link DocQLException#retryable()} false), or a 401, a 404 and
+     *         any other non-retried status, always with
+     *         {@link DocQLException#jobId()} set
+     * @throws DocQLWaitTimeoutException when the next sleep would pass the
+     *         deadline
+     * @throws DocQLConnectionException when the waiting thread is
+     *         interrupted; the interrupt flag is set again
+     */
+    public Job waitFor(String jobId) {
+        return Jobs.waitFor(this, jobId, Jobs.DEFAULT_WAIT, null);
+    }
+
     /** One prepared request: the framed HttpRequest and the file length (the size-hint input). */
     private record PreparedRequest(HttpRequest request, long fileLength) {
     }
@@ -239,6 +363,29 @@ public final class DocQL {
      * asynchronous call so both send identical requests.
      */
     private PreparedRequest prepare(DocFile file, Instruction instruction, QueryOptions options) {
+        Jobs.Upload upload = upload(file, instruction, options);
+
+        // Exactly three per-request headers: the key travels on the request
+        // only, never as a client default, and no X-Request-Id or x-docql-*
+        // header is ever set (D-10, D-13).
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(apiUrl + QUERY_PATH))
+                .timeout(timeout)
+                .header("X-API-Key", apiKey)
+                .header("Content-Type", upload.contentType())
+                .header("User-Agent", userAgent())
+                .POST(upload.publisher())
+                .build();
+
+        return new PreparedRequest(request, upload.fileLength());
+    }
+
+    /**
+     * The multipart body of one upload, shared by queryDocument and
+     * submitDocument: every client-side check runs here, before a byte is
+     * sent.
+     */
+    private Jobs.Upload upload(DocFile file, Instruction instruction, QueryOptions options) {
         Objects.requireNonNull(file, "file");
         Objects.requireNonNull(instruction, "instruction");
         Objects.requireNonNull(options, "options");
@@ -289,23 +436,12 @@ public final class DocQL {
         String boundary = boundarySupplier.get();
         byte[] preamble = Multipart.preamble(boundary, partName);
         byte[] epilogue = Multipart.epilogue(boundary, bodyJson);
-
-        // Exactly three per-request headers: the key travels on the request
-        // only, never as a client default, and no X-Request-Id or x-docql-*
-        // header is ever set (D-10, D-13).
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(apiUrl + QUERY_PATH))
-                .timeout(timeout)
-                .header("X-API-Key", apiKey)
-                .header("Content-Type", Multipart.contentType(boundary))
-                .header("User-Agent", userAgent())
-                .POST(HttpRequest.BodyPublishers.concat(
+        return new Jobs.Upload(Multipart.contentType(boundary),
+                HttpRequest.BodyPublishers.concat(
                         HttpRequest.BodyPublishers.ofByteArray(preamble),
                         filePublisher(file),
-                        HttpRequest.BodyPublishers.ofByteArray(epilogue)))
-                .build();
-
-        return new PreparedRequest(request, fileLength);
+                        HttpRequest.BodyPublishers.ofByteArray(epilogue)),
+                fileLength);
     }
 
     /**
@@ -362,10 +498,38 @@ public final class DocQL {
     }
 
     /** The User-Agent of every request (D-13). */
-    private static String userAgent() {
+    static String userAgent() {
         return "docql-java/" + VERSION
                 + " (java " + System.getProperty("java.version")
                 + "; " + System.getProperty("os.name") + "/" + System.getProperty("os.arch") + ")";
+    }
+
+    String apiKey() {
+        return apiKey;
+    }
+
+    String apiUrl() {
+        return apiUrl;
+    }
+
+    String host() {
+        return host;
+    }
+
+    HttpClient httpClient() {
+        return httpClient;
+    }
+
+    boolean sdkBuiltClient() {
+        return sdkBuiltClient;
+    }
+
+    Jobs.Sleeper sleeper() {
+        return sleeper;
+    }
+
+    LongSupplier nanoClock() {
+        return nanoClock;
     }
 
     /**
@@ -410,6 +574,8 @@ public final class DocQL {
 
         private Function<String, String> envLookup = System::getenv;
         private Supplier<String> boundarySupplier = Multipart::randomBoundary;
+        private Jobs.Sleeper sleeper = d -> TimeUnit.NANOSECONDS.sleep(Jobs.nanos(d));
+        private LongSupplier nanoClock = System::nanoTime;
         private String apiKey;
         private String apiUrl;
         private Duration timeout;
@@ -497,7 +663,7 @@ public final class DocQL {
             return new DocQL(resolveKey(), resolveUrl(), resolveTimeout(),
                     httpClient != null ? validateClient(httpClient) : sdkClient(),
                     httpClient == null,
-                    boundarySupplier);
+                    boundarySupplier, sleeper, nanoClock);
         }
 
         private String resolveKey() {

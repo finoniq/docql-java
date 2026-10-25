@@ -22,7 +22,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * builders, every type's public declared methods and the absence of public
  * constructors — pinned so nothing drifts before the owner surface review.
  * The pinned {@code DocQL} list carries the two {@code queryDocumentAsync}
- * overloads (13-04, D-05).
+ * overloads (13-04, D-05) and the v0.2 job methods with the names the owner
+ * froze at 26-01 (JSDK-01); Job is a final class, never a record (JSDK-03).
  */
 class SurfaceTest {
 
@@ -122,7 +123,8 @@ class SurfaceTest {
         }
 
         assertEquals(Set.of("DocQL", "DocQLConnectionException", "DocQLException", "DocFile",
-                "DocQLTimeoutException", "Instruction", "Mode", "QueryOptions", "QueryResult", "Reasons"),
+                "DocQLTimeoutException", "DocQLWaitTimeoutException", "Instruction", "Job", "JobStatus", "Mode",
+                "QueryOptions", "QueryResult", "Reasons"),
                 topLevel, "the public top-level types drifted");
         assertEquals(Set.of("DocQL$Builder", "QueryOptions$Builder"), nested,
                 "the public nested types drifted");
@@ -130,7 +132,9 @@ class SurfaceTest {
         Map<String, Set<String>> wantMethods = new TreeMap<>();
         wantMethods.put("DocQL", Set.of("builder()", "queryDocument(DocFile,Instruction)",
                 "queryDocument(DocFile,Instruction,QueryOptions)", "queryDocumentAsync(DocFile,Instruction)",
-                "queryDocumentAsync(DocFile,Instruction,QueryOptions)", "toString()"));
+                "queryDocumentAsync(DocFile,Instruction,QueryOptions)", "toString()",
+                "submitDocument(DocFile,Instruction)", "submitDocument(DocFile,Instruction,QueryOptions)",
+                "getJob(String)", "waitFor(String)"));
         wantMethods.put("DocQL$Builder", Set.of("apiKey(String)", "apiUrl(String)", "timeout(Duration)",
                 "httpClient(HttpClient)", "build()"));
         wantMethods.put("DocFile", Set.of("bytes(byte[],String)", "path(Path)", "stream(InputStream,long,String)"));
@@ -141,9 +145,14 @@ class SurfaceTest {
         wantMethods.put("Reasons", Set.of());
         wantMethods.put("QueryResult", Set.of("data()", "requestId()", "pageCount()", "pagesOcr()", "metadata()"));
         wantMethods.put("DocQLException", Set.of("status()", "reason()", "requestId()", "retryAfter()",
-                "retryable()", "serverMessage()", "body()", "getMessage()"));
+                "retryable()", "serverMessage()", "body()", "getMessage()", "jobId()", "idempotencyKey()"));
         wantMethods.put("DocQLConnectionException", Set.of());
         wantMethods.put("DocQLTimeoutException", Set.of());
+        wantMethods.put("DocQLWaitTimeoutException", Set.of("jobId()"));
+        wantMethods.put("Job", Set.of("jobId()", "status()", "pageCount()", "pagesDone()", "requestId()",
+                "createdAt()", "startedAt()", "finishedAt()", "expiresAt()", "result()", "error()",
+                "retryAfter()", "idempotencyKey()", "toString()"));
+        wantMethods.put("JobStatus", Set.of());
 
         for (Map.Entry<String, Set<String>> entry : wantMethods.entrySet()) {
             Class<?> cls = types.get(entry.getKey());
@@ -167,6 +176,17 @@ class SurfaceTest {
                 got.add(signature.append(')').toString());
             }
             assertEquals(entry.getValue(), got, entry.getKey() + " public method drift");
+        }
+
+        assertTrue(!types.get("Job").isRecord() && Modifier.isFinal(types.get("Job").getModifiers()),
+                "Job must be a final class, not a record (JSDK-03)");
+        assertTrue(Modifier.isFinal(types.get("JobStatus").getModifiers()) && !types.get("JobStatus").isEnum(),
+                "JobStatus must be a final class of String constants, not an enum (D-09)");
+        assertTrue(DocQLTimeoutException.class.isAssignableFrom(types.get("DocQLWaitTimeoutException")),
+                "DocQLWaitTimeoutException belongs to the timeout family (26-01 option recommended)");
+
+        for (Method method : DocQL.class.getDeclaredMethods()) {
+            assertTrue(!method.getName().equals("wait"), "no DocQL method may be named wait (final on Object)");
         }
 
         for (Class<?> cls : types.values()) {

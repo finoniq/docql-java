@@ -12,7 +12,9 @@ import java.util.List;
  * envelope form {@code "<status> <reason>[: <serverMessage>]
  * (request_id=…, retry_after=Ns)"} and, for responses without a DocQL
  * envelope, {@code "<status> (non-DocQL response): <snippet>"}. Neither form
- * ever contains the API key.
+ * ever contains the API key. An error from a job method adds
+ * {@code job_id=<id>} to the parenthesised tail; without a job id both forms
+ * are exactly the v0.1.0 ones. The idempotency key never appears.
  */
 public class DocQLException extends RuntimeException {
 
@@ -32,9 +34,18 @@ public class DocQLException extends RuntimeException {
     private final String serverMessage;
     /** The response body, valid UTF-8, scrubbed, capped at 2048 characters. */
     private final String body;
+    /** The job the error belongs to; null outside the job methods. */
+    private final String jobId;
+    /** The Idempotency-Key of the submit that failed; null otherwise. */
+    private final String idempotencyKey;
 
     DocQLException(int status, String reason, String requestId, Duration retryAfter,
             boolean retryable, String serverMessage, String body) {
+        this(status, reason, requestId, retryAfter, retryable, serverMessage, body, null, null);
+    }
+
+    DocQLException(int status, String reason, String requestId, Duration retryAfter,
+            boolean retryable, String serverMessage, String body, String jobId, String idempotencyKey) {
         super((String) null);
         this.status = status;
         this.reason = reason;
@@ -43,6 +54,18 @@ public class DocQLException extends RuntimeException {
         this.retryable = retryable;
         this.serverMessage = serverMessage;
         this.body = body;
+        this.jobId = jobId;
+        this.idempotencyKey = idempotencyKey;
+    }
+
+    /**
+     * This error with the job context set: a job id, an idempotency key and
+     * the retryable flag (a failed job is never retryable). Everything else
+     * is kept.
+     */
+    DocQLException withJob(String newJobId, String newIdempotencyKey, boolean newRetryable) {
+        return new DocQLException(status, reason, requestId, retryAfter, newRetryable, serverMessage, body,
+                newJobId, newIdempotencyKey);
     }
 
     /**
@@ -113,6 +136,29 @@ public class DocQLException extends RuntimeException {
         return body;
     }
 
+    /**
+     * Returns the id of the job this error belongs to: set on a failed job's
+     * error and on every error {@link DocQL#getJob(String)} and
+     * {@link DocQL#waitFor(String)} throw; null otherwise.
+     *
+     * @return the job id, or null
+     */
+    public String jobId() {
+        return jobId;
+    }
+
+    /**
+     * Returns the {@code Idempotency-Key} of the submit this error answered:
+     * retrying {@link DocQL#submitDocument(DocFile, Instruction, QueryOptions)}
+     * with the same key never creates a second job (D-08). Null outside a
+     * submit. Never part of {@link #getMessage()}.
+     *
+     * @return the idempotency key, or null
+     */
+    public String idempotencyKey() {
+        return idempotencyKey;
+    }
+
     @Override
     public String getMessage() {
         if (reason != null) {
@@ -128,6 +174,9 @@ public class DocQLException extends RuntimeException {
             if (retryAfter != null) {
                 extras.add("retry_after=" + retryAfter.toSeconds() + "s");
             }
+            if (jobId != null) {
+                extras.add("job_id=" + printableJobId());
+            }
             if (!extras.isEmpty()) {
                 text.append(" (").append(String.join(", ", extras)).append(')');
             }
@@ -135,10 +184,26 @@ public class DocQLException extends RuntimeException {
         }
         StringBuilder text = new StringBuilder();
         text.append(status).append(" (non-DocQL response): ").append(snippet(body));
+        List<String> tail = new ArrayList<>();
         if (requestId != null && !requestId.isEmpty()) {
-            text.append(" (request_id=").append(requestId).append(')');
+            tail.add("request_id=" + requestId);
+        }
+        if (jobId != null) {
+            tail.add("job_id=" + printableJobId());
+        }
+        if (!tail.isEmpty()) {
+            text.append(" (").append(String.join(", ", tail)).append(')');
         }
         return text.toString();
+    }
+
+    /**
+     * The job id inside the message: it may come from the caller or the
+     * server, so control characters collapse and a hostile id cannot forge
+     * log lines.
+     */
+    private String printableJobId() {
+        return Decoder.sanitise(jobId, null);
     }
 
     /**
