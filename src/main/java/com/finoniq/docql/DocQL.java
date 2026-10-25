@@ -132,7 +132,8 @@ public final class DocQL {
      * @return the extraction result
      * @throws NullPointerException if file, instruction or options is null
      * @throws IllegalArgumentException if the effective file-part name would
-     *         be empty
+     *         be empty, or the options carry an idempotency key (a
+     *         submitDocument option)
      * @throws DocQLException on every non-2xx response and an unusable 2xx
      * @throws DocQLConnectionException on a transport failure
      * @throws DocQLTimeoutException when the request deadline expires
@@ -267,10 +268,11 @@ public final class DocQL {
      * ({@code POST /v1/jobs}) and returns the queued {@link Job} at once:
      * poll it with {@link #getJob(String)} or block on it with
      * {@link #waitFor(String)}. The request carries one
-     * {@code Idempotency-Key}, generated per call (32 random bytes,
-     * base64url); the returned Job and every error carry it, so a caller can
-     * resubmit with the same key and never create a second billable job
-     * (D-07, D-08). Every client-side check happens before a byte is sent.
+     * {@code Idempotency-Key}: {@link QueryOptions.Builder#idempotencyKey(String)}
+     * when set, else one generated per call (32 random bytes, base64url). The
+     * returned Job and every error carry it, so a caller can resubmit with the
+     * same key and never create a second billable job (D-07, D-08). Every
+     * client-side check happens before a byte is sent.
      *
      * @param file the document to extract from
      * @param instruction what to extract
@@ -286,7 +288,7 @@ public final class DocQL {
      */
     public Job submitDocument(DocFile file, Instruction instruction, QueryOptions options) {
         Jobs.Upload upload = upload(file, instruction, options);
-        String key = Jobs.newIdempotencyKey();
+        String key = options.idempotencyKey() != null ? options.idempotencyKey() : Jobs.newIdempotencyKey();
         Jobs.Answer answer;
         try {
             answer = Jobs.sendOnce(this, "POST", Jobs.JOBS_PATH, upload, List.of(key), timeout);
@@ -353,13 +355,27 @@ public final class DocQL {
     }
 
     /**
-     * Not implemented yet (26-08 Task 2 RED).
+     * Asks DocQL to cancel the job ({@code DELETE /v1/jobs/{id}}) and
+     * returns the Job as the answer states it (OD-10). A 202 answers the job
+     * right after the cancel request, which may still show it
+     * {@link JobStatus#RUNNING}: poll with {@link #getJob(String)} to confirm
+     * it reached {@link JobStatus#CANCELLED}. A 200 answers a job that had
+     * already finished; cancelling it again answers the same job. One request
+     * with a 30 s deadline; nothing retries. This is the only call that
+     * cancels a job: {@link #waitFor(String)} never does.
      *
-     * @param jobId the job id
-     * @return never
+     * @param jobId the job id from {@link Job#jobId()}
+     * @return the job as answered
+     * @throws IllegalArgumentException if jobId is null or empty (before any
+     *         request)
+     * @throws DocQLException on every non-2xx response (e.g. 404
+     *         {@code job_not_found}) and an unusable 2xx, with
+     *         {@link DocQLException#jobId()} set
+     * @throws DocQLConnectionException on a transport failure
+     * @throws DocQLTimeoutException when the 30 s deadline expires
      */
     public Job cancelJob(String jobId) {
-        throw new UnsupportedOperationException("cancelJob is not implemented yet");
+        return Jobs.cancel(this, jobId);
     }
 
     /** One prepared request: the framed HttpRequest and the file length (the size-hint input). */
@@ -373,6 +389,14 @@ public final class DocQL {
      * asynchronous call so both send identical requests.
      */
     private PreparedRequest prepare(DocFile file, Instruction instruction, QueryOptions options) {
+        Objects.requireNonNull(file, "file");
+        Objects.requireNonNull(instruction, "instruction");
+        Objects.requireNonNull(options, "options");
+        // The key is a job concept: the sync call has no Idempotency-Key and
+        // never sends one (JSDK-03).
+        if (options.idempotencyKey() != null) {
+            throw new IllegalArgumentException("idempotencyKey applies to submitDocument, not queryDocument");
+        }
         Jobs.Upload upload = upload(file, instruction, options);
 
         // Exactly three per-request headers: the key travels on the request

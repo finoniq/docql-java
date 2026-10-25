@@ -209,10 +209,25 @@ final class Jobs {
         try {
             response = client.httpClient().send(builder.build(), BoundedBodySubscriber.handler());
         } catch (IOException e) {
-            throw Transport.mapFailure(e, upload == null ? 0 : upload.fileLength(), client.apiKey(),
-                    client.host(), timeout, client.sdkBuiltClient());
+            RuntimeException mapped = Transport.mapFailure(e, upload == null ? 0 : upload.fileLength(),
+                    client.apiKey(), client.host(), timeout, client.sdkBuiltClient());
+            throw keys.size() == 1 ? withKey(mapped, keys.get(0)) : mapped;
         }
         return new Answer(response.statusCode(), response.headers(), response.body());
+    }
+
+    /**
+     * The mapped transport failure carrying the one key the request sent
+     * (D-08): the job may exist, and the caller retries with that key.
+     */
+    private static RuntimeException withKey(RuntimeException mapped, String key) {
+        if (mapped instanceof DocQLTimeoutException) {
+            return new DocQLTimeoutException(mapped.getMessage(), mapped.getCause(), key);
+        }
+        if (mapped instanceof DocQLConnectionException) {
+            return new DocQLConnectionException(mapped.getMessage(), mapped.getCause(), key);
+        }
+        return mapped;
     }
 
     /**
@@ -313,6 +328,23 @@ final class Jobs {
         Answer answer;
         try {
             answer = sendOnce(client, "GET", path, null, List.of(), POLL_TIMEOUT);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new DocQLConnectionException(Decoder.scrub("interrupted", client.apiKey()), e);
+        }
+        return jobOrThrow(answer, client.apiKey(), jobId);
+    }
+
+    /**
+     * One DELETE of the job (OD-10): the Job as answered, else
+     * DocQLException with the job id. The only DELETE in the SDK, reached
+     * only through the caller's explicit cancelJob.
+     */
+    static Job cancel(DocQL client, String jobId) {
+        String path = jobPath(jobId);
+        Answer answer;
+        try {
+            answer = sendOnce(client, "DELETE", path, null, List.of(), POLL_TIMEOUT);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new DocQLConnectionException(Decoder.scrub("interrupted", client.apiKey()), e);
