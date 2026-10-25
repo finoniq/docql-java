@@ -34,14 +34,30 @@ final class FakeServer {
 
         private final String method;
         private final String path;
+        private final String rawPath;
         private final Map<String, String> headers;
+        private final Map<String, List<String>> headerLines;
         private final byte[] body;
 
-        CapturedRequest(String method, String path, Map<String, String> headers, byte[] body) {
+        CapturedRequest(String method, String path, String rawPath, Map<String, String> headers,
+                Map<String, List<String>> headerLines, byte[] body) {
             this.method = method;
             this.path = path;
+            this.rawPath = rawPath;
             this.headers = headers;
+            this.headerLines = headerLines;
             this.body = body;
+        }
+
+        /** The request path exactly as it arrived on the request line, percent-encoding kept. */
+        String rawPath() {
+            return rawPath;
+        }
+
+        /** Every value of a request header under a case-insensitive name, one per line; empty when absent. */
+        List<String> headerValues(String name) {
+            List<String> values = headerLines.get(name.toLowerCase(Locale.ROOT));
+            return values == null ? List.of() : values;
         }
 
         /** The request method, e.g. {@code POST}. */
@@ -196,7 +212,8 @@ final class FakeServer {
             body = in.readAllBytes();
         }
         requests.add(new CapturedRequest(exchange.getRequestMethod(), exchange.getRequestURI().getPath(),
-                lowerCased(exchange.getRequestHeaders()), body));
+                exchange.getRequestURI().getRawPath(), lowerCased(exchange.getRequestHeaders()),
+                allLines(exchange.getRequestHeaders()), body));
 
         int status;
         byte[] payload;
@@ -238,6 +255,15 @@ final class FakeServer {
             Thread.currentThread().interrupt();
             throw new UncheckedIOException(new IOException("interrupted while holding the response", e));
         }
+    }
+
+    private static Map<String, List<String>> allLines(com.sun.net.httpserver.Headers headers) {
+        Map<String, List<String>> lines = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+        for (Map.Entry<String, List<String>> entry : headers.entrySet()) {
+            lines.put(entry.getKey().toLowerCase(Locale.ROOT),
+                    entry.getValue() == null ? List.of() : List.copyOf(entry.getValue()));
+        }
+        return lines;
     }
 
     private static Map<String, String> lowerCased(com.sun.net.httpserver.Headers headers) {

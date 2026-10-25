@@ -214,6 +214,81 @@ class DecodeTest {
         assertTrue(seen >= 10, "job-cases.json carries at least ten error decode cases, saw " + seen);
     }
 
+    /**
+     * JSDK-01: every job-cases.json decode case with a 2xx status decodes to
+     * a Job with the expected job id, status and request id (the answer's
+     * X-Request-Id); a succeeded job carries its result, a failed job its
+     * error with the job id set and retryable false; page counts are
+     * Integers and timestamps Instants.
+     */
+    @Test
+    void jobSuccessDecodeCases() {
+        int seen = 0;
+        for (JsonNode c : Kit.jobCases().path("decodeCases")) {
+            int status = c.path("status").asInt();
+            if (status >= 300) {
+                continue;
+            }
+            String id = c.path("id").asText();
+            Map<String, String> headers = new LinkedHashMap<>();
+            for (Map.Entry<String, JsonNode> header : c.path("headers").properties()) {
+                headers.put(header.getKey(), header.getValue().asText());
+            }
+            byte[] body = c.path("bodyUtf8").asText("").getBytes(StandardCharsets.UTF_8);
+            Job job = Jobs.parseJob(status, httpHeaders(headers), body, TEST_KEY, null);
+            JsonNode expect = c.path("expect");
+            JsonNode raw;
+            try {
+                raw = MAPPER.readTree(body);
+            } catch (java.io.IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+            assertEquals(expect.path("jobId").asText(), job.jobId(), id + ": jobId");
+            assertEquals(expect.path("jobStatus").asText(), job.status(), id + ": status");
+            assertEquals(expect.path("requestId").asText(), job.requestId(), id + ": requestId");
+            assertEquals(intOrNull(raw.path("metadata").path("page_count")), job.pageCount(), id + ": pageCount");
+            assertEquals(intOrNull(raw.path("metadata").path("pages_done")), job.pagesDone(), id + ": pagesDone");
+            assertEquals(instantOrNull(raw.path("created_at")), job.createdAt(), id + ": createdAt");
+            assertEquals(instantOrNull(raw.path("started_at")), job.startedAt(), id + ": startedAt");
+            assertEquals(instantOrNull(raw.path("finished_at")), job.finishedAt(), id + ": finishedAt");
+            assertEquals(instantOrNull(raw.path("expires_at")), job.expiresAt(), id + ": expiresAt");
+            JsonNode retryAfter = c.path("headers").path("retry-after");
+            assertEquals(retryAfter.isTextual() ? Duration.ofSeconds(Long.parseLong(retryAfter.asText())) : null,
+                    job.retryAfter(), id + ": retryAfter");
+            assertNull(job.idempotencyKey(), id + ": no key outside a submit");
+            if (JobStatus.SUCCEEDED.equals(job.status())) {
+                assertNotNull(job.result(), id + ": result");
+                assertEquals(raw.path("result").path("data"), job.result().data(), id + ": result data");
+                assertEquals(intOrNull(raw.path("result").path("metadata").path("page_count")),
+                        job.result().pageCount(), id + ": result pageCount");
+            } else {
+                assertNull(job.result(), id + ": no result unless succeeded");
+            }
+            if (JobStatus.FAILED.equals(job.status())) {
+                DocQLException error = job.error();
+                assertNotNull(error, id + ": error");
+                JsonNode rawError = raw.path("error");
+                assertEquals(rawError.path("metadata").path("reason").asText(), error.reason(), id + ": reason");
+                assertEquals(rawError.path("status_code").asInt(500), error.status(), id + ": embedded status");
+                assertEquals(job.jobId(), error.jobId(), id + ": error jobId");
+                assertFalse(error.retryable(), id + ": a failed job is final");
+                assertNull(error.idempotencyKey(), id + ": no key on a polled error");
+            } else {
+                assertNull(job.error(), id + ": no error unless failed");
+            }
+            seen++;
+        }
+        assertTrue(seen >= 11, "job-cases.json carries at least eleven 2xx decode cases, saw " + seen);
+    }
+
+    private static Integer intOrNull(JsonNode node) {
+        return node.isIntegralNumber() ? node.intValue() : null;
+    }
+
+    private static java.time.Instant instantOrNull(JsonNode node) {
+        return node.isTextual() ? java.time.Instant.parse(node.asText()) : null;
+    }
+
     @Test
     void retryableOnlyFor429And503() {
         Map<Integer, Boolean> expected = Map.of(

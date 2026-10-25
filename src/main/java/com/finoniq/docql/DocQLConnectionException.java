@@ -18,4 +18,13 @@ public class DocQLConnectionException extends RuntimeException {
     DocQLConnectionException(String message, Throwable cause) {
         super(message, cause);
     }
+
+    /**
+     * Not implemented yet (26-08 Task 2 RED).
+     *
+     * @return null
+     */
+    public String idempotencyKey() {
+        return null;
+    }
 }

@@ -134,19 +134,20 @@ class SurfaceTest {
                 "queryDocument(DocFile,Instruction,QueryOptions)", "queryDocumentAsync(DocFile,Instruction)",
                 "queryDocumentAsync(DocFile,Instruction,QueryOptions)", "toString()",
                 "submitDocument(DocFile,Instruction)", "submitDocument(DocFile,Instruction,QueryOptions)",
-                "getJob(String)", "waitFor(String)"));
+                "getJob(String)", "waitFor(String)", "cancelJob(String)"));
         wantMethods.put("DocQL$Builder", Set.of("apiKey(String)", "apiUrl(String)", "timeout(Duration)",
                 "httpClient(HttpClient)", "build()"));
         wantMethods.put("DocFile", Set.of("bytes(byte[],String)", "path(Path)", "stream(InputStream,long,String)"));
         wantMethods.put("Instruction", Set.of("query(String)", "prompt(String)"));
         wantMethods.put("Mode", Set.of("of(String)", "value()", "equals(Object)", "hashCode()", "toString()"));
         wantMethods.put("QueryOptions", Set.of("builder()"));
-        wantMethods.put("QueryOptions$Builder", Set.of("mode(Mode)", "filename(String)", "build()"));
+        wantMethods.put("QueryOptions$Builder", Set.of("mode(Mode)", "filename(String)", "build()",
+                "idempotencyKey(String)"));
         wantMethods.put("Reasons", Set.of());
         wantMethods.put("QueryResult", Set.of("data()", "requestId()", "pageCount()", "pagesOcr()", "metadata()"));
         wantMethods.put("DocQLException", Set.of("status()", "reason()", "requestId()", "retryAfter()",
                 "retryable()", "serverMessage()", "body()", "getMessage()", "jobId()", "idempotencyKey()"));
-        wantMethods.put("DocQLConnectionException", Set.of());
+        wantMethods.put("DocQLConnectionException", Set.of("idempotencyKey()"));
         wantMethods.put("DocQLTimeoutException", Set.of());
         wantMethods.put("DocQLWaitTimeoutException", Set.of("jobId()"));
         wantMethods.put("Job", Set.of("jobId()", "status()", "pageCount()", "pagesDone()", "requestId()",

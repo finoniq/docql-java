@@ -12,7 +12,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -34,16 +33,14 @@ import static org.junit.jupiter.api.Assertions.fail;
  * <p>Step semantics follow the kit's reference runners (docql-console
  * {@code deploy/scripts/job-cases-edge.mjs}): a per-run {@code {run}} token
  * keeps each case's fingerprint unique, {@code submit} posts the document as
- * a job and binds the answered job id, and {@code wait} calls the public
+ * a job and binds the answered job id, {@code cancel} calls the public
+ * {@link DocQL#cancelJob(String)}, and {@code wait} calls the public
  * {@link DocQL#waitFor(String)}. Each case prints
  * {@code JOB_CONTRACT_WAIT_OK <id>} when it passes.
  */
 class JobContractIT {
 
     private static final List<String> KNOWN_VIAS = List.of("submit", "poll", "cancel", "wait", "sync", "infra");
-
-    /** The via: wait cases this runner covers; wait-cancelled needs cancelJob (Task 2). */
-    private static final Set<String> RUN_IDS = Set.of("wait-succeeded", "wait-failed");
 
     /** One token per JVM run: 8 base62 characters (kit invariant 8). */
     private static final String RUN = runToken();
@@ -88,8 +85,7 @@ class JobContractIT {
     private static List<JsonNode> waitCases() {
         List<JsonNode> cases = new ArrayList<>();
         for (JsonNode c : Kit.jobCases().path("cases")) {
-            if ("stub".equals(c.path("target").asText()) && "wait".equals(c.path("via").asText())
-                    && RUN_IDS.contains(c.path("id").asText())) {
+            if ("stub".equals(c.path("target").asText()) && "wait".equals(c.path("via").asText())) {
                 cases.add(c);
             }
         }
@@ -102,7 +98,7 @@ class JobContractIT {
         for (JsonNode c : waitCases()) {
             ids.add(c.path("id").asText());
         }
-        assertEquals(List.of("wait-succeeded", "wait-failed"), ids);
+        assertEquals(List.of("wait-succeeded", "wait-failed", "wait-cancelled"), ids);
     }
 
     @TestFactory
@@ -151,6 +147,13 @@ class JobContractIT {
                     assertFalse(job.jobId().isEmpty(), id + ": job id");
                     assertNotNull(job.idempotencyKey(), id + ": generated idempotency key");
                     jobs.put(step.path("as").asText(), job);
+                    break;
+                }
+                case "cancel": {
+                    assertEquals(202, step.path("expect").path("status").asInt(), id + ": expected status");
+                    String jobId = jobs.get(step.path("job").asText()).jobId();
+                    Job cancelled = client.cancelJob(jobId);
+                    assertEquals(jobId, cancelled.jobId(), id + ": cancelled job id");
                     break;
                 }
                 case "wait": {

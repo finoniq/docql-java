@@ -41,8 +41,20 @@ public final class QueryOptions {
 
         private Mode mode;
         private String filename;
+        private String idempotencyKey;
 
         private Builder() {
+        }
+
+        /**
+         * Not implemented yet (26-08 Task 2 RED).
+         *
+         * @param idempotencyKey the key
+         * @return this builder
+         */
+        public Builder idempotencyKey(String idempotencyKey) {
+            this.idempotencyKey = idempotencyKey;
+            return this;
         }
 
         /**

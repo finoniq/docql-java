@@ -352,6 +352,16 @@ public final class DocQL {
         return Jobs.waitFor(this, jobId, Jobs.DEFAULT_WAIT, null);
     }
 
+    /**
+     * Not implemented yet (26-08 Task 2 RED).
+     *
+     * @param jobId the job id
+     * @return never
+     */
+    public Job cancelJob(String jobId) {
+        throw new UnsupportedOperationException("cancelJob is not implemented yet");
+    }
+
     /** One prepared request: the framed HttpRequest and the file length (the size-hint input). */
     private record PreparedRequest(HttpRequest request, long fileLength) {
     }
