@@ -124,9 +124,9 @@ class SurfaceTest {
 
         assertEquals(Set.of("DocQL", "DocQLConnectionException", "DocQLException", "DocFile",
                 "DocQLTimeoutException", "DocQLWaitTimeoutException", "Instruction", "Job", "JobStatus", "Mode",
-                "QueryOptions", "QueryResult", "Reasons"),
+                "QueryOptions", "QueryResult", "Reasons", "WaitOptions"),
                 topLevel, "the public top-level types drifted");
-        assertEquals(Set.of("DocQL$Builder", "QueryOptions$Builder"), nested,
+        assertEquals(Set.of("DocQL$Builder", "QueryOptions$Builder", "WaitOptions$Builder"), nested,
                 "the public nested types drifted");
 
         Map<String, Set<String>> wantMethods = new TreeMap<>();
@@ -134,7 +134,7 @@ class SurfaceTest {
                 "queryDocument(DocFile,Instruction,QueryOptions)", "queryDocumentAsync(DocFile,Instruction)",
                 "queryDocumentAsync(DocFile,Instruction,QueryOptions)", "toString()",
                 "submitDocument(DocFile,Instruction)", "submitDocument(DocFile,Instruction,QueryOptions)",
-                "getJob(String)", "waitFor(String)", "cancelJob(String)"));
+                "getJob(String)", "waitFor(String)", "waitFor(String,WaitOptions)", "cancelJob(String)"));
         wantMethods.put("DocQL$Builder", Set.of("apiKey(String)", "apiUrl(String)", "timeout(Duration)",
                 "httpClient(HttpClient)", "build()"));
         wantMethods.put("DocFile", Set.of("bytes(byte[],String)", "path(Path)", "stream(InputStream,long,String)"));
@@ -154,6 +154,8 @@ class SurfaceTest {
                 "createdAt()", "startedAt()", "finishedAt()", "expiresAt()", "result()", "error()",
                 "retryAfter()", "idempotencyKey()", "toString()"));
         wantMethods.put("JobStatus", Set.of());
+        wantMethods.put("WaitOptions", Set.of("builder()"));
+        wantMethods.put("WaitOptions$Builder", Set.of("timeout(Duration)", "pollInterval(Duration)", "build()"));
 
         for (Map.Entry<String, Set<String>> entry : wantMethods.entrySet()) {
             Class<?> cls = types.get(entry.getKey());

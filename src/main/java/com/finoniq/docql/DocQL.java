@@ -351,7 +351,32 @@ public final class DocQL {
      *         interrupted; the interrupt flag is set again
      */
     public Job waitFor(String jobId) {
-        return Jobs.waitFor(this, jobId, Jobs.DEFAULT_WAIT, null);
+        return waitFor(jobId, WaitOptions.builder().build());
+    }
+
+    /**
+     * Polls the job until it succeeds or is cancelled and returns it, with
+     * the wait timeout and poll interval of the options. Everything else is
+     * {@link #waitFor(String)}.
+     *
+     * @param jobId the job id from {@link Job#jobId()}
+     * @param options the wait timeout and the shortest sleep between polls
+     * @return the succeeded or cancelled job
+     * @throws NullPointerException if options is null
+     * @throws IllegalArgumentException if jobId is null or empty (before any
+     *         request)
+     * @throws DocQLException the job's own error when it failed
+     *         ({@link DocQLException#retryable()} false), or a 401, a 404 and
+     *         any other non-retried status, always with
+     *         {@link DocQLException#jobId()} set
+     * @throws DocQLWaitTimeoutException when the next sleep would reach or
+     *         pass the deadline
+     * @throws DocQLConnectionException when the waiting thread is
+     *         interrupted; the interrupt flag is set again
+     */
+    public Job waitFor(String jobId, WaitOptions options) {
+        Objects.requireNonNull(options, "options");
+        return Jobs.waitFor(this, jobId, options.timeout(), options.pollInterval());
     }
 
     /**
@@ -679,6 +704,18 @@ public final class DocQL {
         /** Overrides the random boundary source (tests pin the golden boundary). */
         Builder boundary(Supplier<String> boundary) {
             this.boundarySupplier = Objects.requireNonNull(boundary, "boundary");
+            return this;
+        }
+
+        /** Overrides the wait's sleep (tests record the sleeps and advance a fake clock). */
+        Builder sleeper(Jobs.Sleeper sleeper) {
+            this.sleeper = Objects.requireNonNull(sleeper, "sleeper");
+            return this;
+        }
+
+        /** Overrides the wait's monotonic clock in nanoseconds (tests pass a fake clock). */
+        Builder nanoClock(LongSupplier nanoClock) {
+            this.nanoClock = Objects.requireNonNull(nanoClock, "nanoClock");
             return this;
         }
 

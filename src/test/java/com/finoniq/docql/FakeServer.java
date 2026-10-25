@@ -150,6 +150,8 @@ final class FakeServer {
     private final AtomicLong sequence = new AtomicLong();
     private volatile Duration hold = Duration.ZERO;
     private volatile boolean echoData;
+    private volatile boolean repeatLast;
+    private volatile Canned last;
 
     FakeServer() throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -195,6 +197,12 @@ final class FakeServer {
         return this;
     }
 
+    /** Once the queue is empty, answers every request with the last canned response again. */
+    FakeServer repeatLast() {
+        this.repeatLast = true;
+        return this;
+    }
+
     /** Answers every request with the request's own body part as {@code data}. */
     FakeServer echoData() {
         this.echoData = true;
@@ -218,6 +226,12 @@ final class FakeServer {
         int status;
         byte[] payload;
         Canned response = canned.poll();
+        if (response == null && repeatLast) {
+            response = last;
+        }
+        if (response != null) {
+            last = response;
+        }
         if (echoData) {
             status = 200;
             payload = ("{\"data\":" + requests.get(requests.size() - 1).bodyJsonPart()
