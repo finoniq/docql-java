@@ -59,11 +59,22 @@ VERSION=$(sed -n 's/^.*String VERSION = "\([^"]*\)".*/\1/p' \
 [ -f "$EXAMPLE" ] || missing
 
 # The example must be ASCII: the source launcher reads it in the default
-# charset, which a non-UTF-8 locale mis-decodes.
-if LC_ALL=C grep -qP '[^\x00-\x7F]' "$EXAMPLE"; then
-  echo "EXAMPLE_MISSING (examples/Quickstart.java is not ASCII)"
-  exit 1
-fi
+# charset, which a non-UTF-8 locale mis-decodes. A plain bracket expression
+# over bytes 0x80-0xFF in the C locale works on BSD and GNU grep alike (no
+# PCRE -P). grep's own error (status 2) fails closed instead of passing.
+ascii_rc=0
+LC_ALL=C grep -q "$(printf '[^\001-\177]')" "$EXAMPLE" || ascii_rc=$?
+case "$ascii_rc" in
+  0)
+    echo "EXAMPLE_MISSING (examples/Quickstart.java is not ASCII)"
+    exit 1
+    ;;
+  1) ;;
+  *)
+    echo "cannot check examples/Quickstart.java for non-ASCII bytes (grep exit $ascii_rc)" >&2
+    exit 2
+    ;;
+esac
 
 # Marker rules: each marker exactly once as a whole line, start before end.
 starts=$(grep -cFx "$START" "$README" || true)
