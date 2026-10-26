@@ -4,7 +4,8 @@
 # the full shared SDK case list against the same pinned stub on JDK 17/21/25, gated on
 # the vendored case count, the nine Java-only live checks and a clean failsafe report,
 # plus the README quickstart (contract-cases), and it is reusable so release.yml runs
-# it on a tag.
+# it on a tag. Since v0.2 the same run also gates the kit v3 stub job cases
+# (JOB_CONTRACT_CASE_OK lines and JOB_CONTRACT_CASES_RAN against the jq count).
 name: contract
 
 on:
@@ -81,6 +82,19 @@ jobs:
             exit 1
           fi
           python3 -c "import sys, xml.etree.ElementTree as E; r = E.parse('target/failsafe-reports/TEST-com.finoniq.docql.ContractIT.xml').getroot(); assert r.get('failures') == '0' and r.get('errors') == '0' and r.get('skipped') == '0' and int(r.get('tests')) > 0, 'the ContractIT failsafe report must be clean'"
-          echo "contract-cases: $ran/$WANT cases, extras ok"
+          # Kit v3 job cases (JSDK-04): every stub-target case with via submit, poll,
+          # cancel or wait must pass through the SDK's wire layer in JobContractIT.
+          WANT_JOBS=$(jq '[.cases[] | select(.target == "stub" and (.via == "submit" or .via == "poll" or .via == "cancel" or .via == "wait"))] | length' contract/job-cases.json)
+          ran_jobs=$(grep -cE '^JOB_CONTRACT_CASE_OK ' "$RUNNER_TEMP/contract.log" || true)
+          if [ "$ran_jobs" -ne "$WANT_JOBS" ]; then
+            echo "expected $WANT_JOBS JOB_CONTRACT_CASE_OK lines (stub job cases), saw $ran_jobs" >&2
+            exit 1
+          fi
+          if ! grep -qx "JOB_CONTRACT_CASES_RAN $WANT_JOBS" "$RUNNER_TEMP/contract.log"; then
+            echo "the exact-count gate line JOB_CONTRACT_CASES_RAN $WANT_JOBS is missing" >&2
+            exit 1
+          fi
+          python3 -c "import sys, xml.etree.ElementTree as E; r = E.parse('target/failsafe-reports/TEST-com.finoniq.docql.JobContractIT.xml').getroot(); assert r.get('failures') == '0' and r.get('errors') == '0' and r.get('skipped') == '0' and int(r.get('tests')) > 0, 'the JobContractIT failsafe report must be clean'"
+          echo "contract-cases: $ran/$WANT cases, $ran_jobs/$WANT_JOBS job cases, extras ok"
       - name: README quickstart
         run: scripts/stub-up.sh --run scripts/run-readme.sh
