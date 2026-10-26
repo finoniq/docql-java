@@ -13,7 +13,6 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Locale;
-import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -274,6 +273,35 @@ public final class DocQL {
      * same key and never create a second billable job (D-07, D-08). Every
      * client-side check happens before a byte is sent.
      *
+     * <p><b>Same-key retry (JSDK-02).</b> A submit 503 may mean DocQL already
+     * created the job, so this method retries any 503, and a 409
+     * {@code idempotency_in_progress} (another submit with the same key is
+     * still being stored), with the <em>same</em> key, at most 4 attempts in
+     * all. Each wait is the answer's {@code Retry-After} clamped to
+     * [1, 30] s, else 1, 2, then 4 s. A 429 (no job was created), any other
+     * error status, a connection failure and a timeout are thrown at once.
+     * DocQL answers a retry with the job the first attempt created
+     * ({@code Idempotent-Replayed: true}), never a second job. A key is
+     * never regenerated for a retry.
+     *
+     * <p>Only an input that can be sent again from its start is retried:
+     * {@link DocFile#bytes} and {@link DocFile#path} always, and a
+     * {@link DocFile#stream} only when its stream supports
+     * {@link java.io.InputStream#markSupported() mark/reset}. For such a
+     * stream the SDK calls {@code mark(length)} before the first attempt and
+     * {@code reset()} before each retry, so a
+     * {@link java.io.BufferedInputStream} keeps up to {@code length} bytes in
+     * memory meanwhile. Any other stream (a {@code FileInputStream}, a socket
+     * stream) is sent once, and its first 503 or 409 is thrown carrying the
+     * key. The caller's stream is never closed and never read past its
+     * declared length.
+     *
+     * <p>A key belongs to the organization for 24 hours (OD-14): the same key
+     * with a different document or instruction is refused with 422
+     * {@code idempotency_key_conflict}. A job that ended {@code failed} (for
+     * example with {@code job_interrupted}) stays the answer to its key, so
+     * submitting that document again needs a new key.
+     *
      * @param file the document to extract from
      * @param instruction what to extract
      * @param options per-call options
@@ -281,30 +309,21 @@ public final class DocQL {
      * @throws NullPointerException if file, instruction or options is null
      * @throws IllegalArgumentException if the effective file-part name would
      *         be empty
-     * @throws DocQLException on every non-2xx response and an unusable 2xx,
+     * @throws DocQLException on every non-2xx response that is not retried
+     *         (or the last one when the attempts run out) and an unusable
+     *         2xx, carrying the idempotency key
+     * @throws DocQLConnectionException on a transport failure, when the
+     *         thread is interrupted (the interrupt flag is set again) or
+     *         when the input cannot be re-read for a retry, carrying the
+     *         idempotency key
+     * @throws DocQLTimeoutException when the request deadline expires,
      *         carrying the idempotency key
-     * @throws DocQLConnectionException on a transport failure
-     * @throws DocQLTimeoutException when the request deadline expires
      */
     public Job submitDocument(DocFile file, Instruction instruction, QueryOptions options) {
-        Jobs.Upload upload = upload(file, instruction, options);
-        String key = options.idempotencyKey() != null ? options.idempotencyKey() : Jobs.newIdempotencyKey();
-        Jobs.Answer answer;
-        try {
-            answer = Jobs.sendOnce(this, "POST", Jobs.JOBS_PATH, upload, List.of(key), timeout);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new DocQLConnectionException(Decoder.scrub("interrupted", apiKey), e);
-        }
-        if (!answer.ok()) {
-            DocQLException error = Decoder.decodeError(answer.status(), answer.headers(), answer.body(), apiKey);
-            throw error.withJob(null, key, error.retryable());
-        }
-        try {
-            return Jobs.parseJob(answer.status(), answer.headers(), answer.body(), apiKey, key);
-        } catch (DocQLException unusable) {
-            throw unusable.withJob(null, key, unusable.retryable());
-        }
+        Objects.requireNonNull(file, "file");
+        Objects.requireNonNull(instruction, "instruction");
+        Objects.requireNonNull(options, "options");
+        return Jobs.submit(this, file, () -> upload(file, instruction, options), options.idempotencyKey(), timeout);
     }
 
     /**
@@ -444,7 +463,7 @@ public final class DocQL {
      * submitDocument: every client-side check runs here, before a byte is
      * sent.
      */
-    private Jobs.Upload upload(DocFile file, Instruction instruction, QueryOptions options) {
+    Jobs.Upload upload(DocFile file, Instruction instruction, QueryOptions options) {
         Objects.requireNonNull(file, "file");
         Objects.requireNonNull(instruction, "instruction");
         Objects.requireNonNull(options, "options");

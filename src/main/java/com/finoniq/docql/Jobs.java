@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.MissingNode;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpHeaders;
@@ -20,6 +22,7 @@ import java.time.format.DateTimeParseException;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 
 /**
  * Async jobs (JSDK-01): the one-request primitive, the job decode and the
@@ -66,6 +69,11 @@ final class Jobs {
     /** The key validation message; the key itself is never echoed (Pitfall 9). */
     static final String IDEMPOTENCY_KEY_MESSAGE =
             "idempotencyKey must be 1-255 printable ASCII characters (0x20-0x7E)";
+    /** At most this many submit attempts per submitDocument call, the first included (D-07). */
+    static final int SUBMIT_MAX_ATTEMPTS = 4;
+    /** The sleep before retry n (1-based) when the answer carries no Retry-After: 1, 2, 4 s. */
+    static final List<Duration> SUBMIT_BACKOFF =
+            List.of(Duration.ofSeconds(1), Duration.ofSeconds(2), Duration.ofSeconds(4));
 
     private static final HttpHeaders NO_HEADERS = HttpHeaders.of(Map.of(), (name, value) -> true);
     private static final SecureRandom RANDOM = new SecureRandom();
@@ -190,6 +198,18 @@ final class Jobs {
         for (String key : keys) {
             validateIdempotencyKey(key);
         }
+        return sendUnchecked(client, method, path, upload, keys, timeout);
+    }
+
+    /**
+     * {@link #sendOnce} without its key validation, for keys the caller has
+     * already validated. The SDK reaches it only through sendOnce; the
+     * contract runner calls it directly for the kit's deliberately malformed
+     * keys (j25), after proving that {@link #validateIdempotencyKey} refuses
+     * them, so DocQL's own answer to such a key can be checked.
+     */
+    static Answer sendUnchecked(DocQL client, String method, String path, Upload upload, List<String> keys,
+            Duration timeout) throws InterruptedException {
         HttpRequest.Builder builder = HttpRequest.newBuilder()
                 .uri(URI.create(client.apiUrl() + path))
                 .timeout(timeout)
@@ -231,6 +251,110 @@ final class Jobs {
             return new DocQLConnectionException(mapped.getMessage(), mapped.getCause(), key);
         }
         return mapped;
+    }
+
+    /**
+     * True when a submit body can be rebuilt byte for byte from its start
+     * (26-01 rule A8): {@link DocFile#bytes} (a private copy) and
+     * {@link DocFile#path} (re-read by {@code ofFile}) always; a
+     * {@link DocFile#stream} only when its stream supports
+     * {@code mark}/{@code reset} and its length fits the int mark limit.
+     * Anything else is sent once.
+     */
+    static boolean isReplayable(DocFile file) {
+        switch (file.kind()) {
+            case BYTES:
+            case PATH:
+                return true;
+            default:
+                return file.length() <= Integer.MAX_VALUE && file.stream().markSupported();
+        }
+    }
+
+    /**
+     * Submits a job with one Idempotency-Key and a bounded same-key retry
+     * (JSDK-02, D-07, D-08), the loop of the Python SDK's
+     * {@code submit_with_retry} and the Go SDK's {@code submitWithRetry}.
+     *
+     * <p>DocQL's handoff (Revision 2026-10-21) says a submit 503 may already
+     * have created the job: "treat every submit 503 as 'a job may exist' and
+     * retry with the same Idempotency-Key". So, with the same key on every
+     * attempt and at most {@link #SUBMIT_MAX_ATTEMPTS} attempts:
+     * <ul>
+     * <li>any 503, and a 409 {@code idempotency_in_progress} (another submit
+     * with this key is still being persisted), is retried when the input is
+     * replayable ({@link #isReplayable}); each sleep is {@code Retry-After}
+     * clamped to [1, 30] s, else 1, 2, 4 s ({@link #SUBMIT_BACKOFF}), through
+     * the client's sleeper;</li>
+     * <li>a 429 (no job exists), every other status, a connection failure and
+     * a timeout are thrown at once;</li>
+     * <li>a key is never regenerated for a retry (a new key could create a
+     * second billable job), and a stream is only ever reset to the mark set
+     * just before the first attempt, and only before a retry.</li>
+     * </ul>
+     * Every exception thrown after the key is chosen carries it.
+     *
+     * @param uploads builds the multipart body of one attempt (a fresh
+     *        publisher each call); the first call runs every client-side
+     *        check, before any request
+     * @param callerKey the caller's key (already validated by
+     *        {@link QueryOptions.Builder#build()}), or null to generate one
+     */
+    static Job submit(DocQL client, DocFile file, Supplier<Upload> uploads, String callerKey, Duration timeout) {
+        String key = callerKey != null ? validateIdempotencyKey(callerKey) : newIdempotencyKey();
+        Upload upload = uploads.get();
+        boolean replayable = isReplayable(file);
+        InputStream stream = replayable && file.kind() == DocFile.Kind.STREAM ? file.stream() : null;
+        if (stream != null) {
+            // A BufferedInputStream keeps up to length bytes for the reset.
+            stream.mark((int) file.length());
+        }
+        String apiKey = client.apiKey();
+        for (int attempt = 1; ; attempt++) {
+            if (attempt > 1) {
+                try {
+                    if (stream != null) {
+                        stream.reset();
+                    }
+                    upload = uploads.get();
+                } catch (IOException | UncheckedIOException e) {
+                    throw new DocQLConnectionException(
+                            "could not re-read the document for the same-key submit retry; the job may exist", e, key);
+                }
+            }
+            Answer answer;
+            try {
+                answer = sendOnce(client, "POST", JOBS_PATH, upload, List.of(key), timeout);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new DocQLConnectionException(Decoder.scrub("interrupted", apiKey), e, key);
+            }
+            if (answer.ok()) {
+                try {
+                    return parseJob(answer.status(), answer.headers(), answer.body(), apiKey, key);
+                } catch (DocQLException unusable) {
+                    throw unusable.withJob(null, key, unusable.retryable());
+                }
+            }
+            DocQLException decoded = Decoder.decodeError(answer.status(), answer.headers(), answer.body(), apiKey);
+            DocQLException error = decoded.withJob(null, key, decoded.retryable());
+            boolean retryable = answer.status() == 503
+                    || (answer.status() == 409 && Reasons.IDEMPOTENCY_IN_PROGRESS.equals(error.reason()));
+            if (!(retryable && replayable && attempt < SUBMIT_MAX_ATTEMPTS)) {
+                throw error;
+            }
+            Duration server = retryAfterHint(answer.headers());
+            Duration sleep = server != null
+                    ? clamp(server, RETRY_AFTER_FLOOR, RETRY_AFTER_CAP)
+                    : SUBMIT_BACKOFF.get(attempt - 1);
+            try {
+                client.sleeper().sleep(sleep);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new DocQLConnectionException(
+                        "submit interrupted before its same-key retry; the job may exist", e, key);
+            }
+        }
     }
 
     /**
