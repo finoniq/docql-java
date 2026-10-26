@@ -18,6 +18,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -273,7 +274,8 @@ class ClientTest {
         assertTrue(request.header("Content-Type").startsWith("multipart/form-data; boundary="),
                 request.header("Content-Type"));
         assertTrue(request.header("User-Agent")
-                        .matches("^docql-java/0\\.1\\.0 \\(java [^;()]+; [^/()]+/[^()]+\\)$"),
+                        .matches("^docql-java/" + Pattern.quote(DocQL.VERSION)
+                                + " \\(java [^;()]+; [^/()]+/[^()]+\\)$"),
                 "User-Agent must be docql-java/<version> (java <version>; <os>/<arch>): "
                         + request.header("User-Agent"));
         assertNull(request.header("X-Request-Id"), "the SDK never sends X-Request-Id");
