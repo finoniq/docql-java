@@ -37,8 +37,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * docql-go's 26-13 fix). A real JDK HttpServer and the SDK-built HttpClient
  * over loopback: the server answers the first submit 503 with
  * {@code Retry-After: 1} while the client is inside the caller's
- * {@code read}, before it has read the upload; the caller's stream stalls in
- * that read, the way a network-backed stream can.
+ * {@code read}, before it has read the upload, and only then reads the rest
+ * of it, never resetting the connection under it (DocQL's gateway does the
+ * same); the caller's stream stalls in that read, the way a network-backed
+ * stream can.
  *
  * <p>This is a guard, not a reproduction: the JDK HttpClient composes the
  * response future only after the request body has been sent or has failed
@@ -184,7 +186,12 @@ class SubmitRewindTest {
         server.stop(0);
     }
 
-    /** 503 upstream_unavailable with Retry-After 1, before reading the upload. */
+    /**
+     * 503 upstream_unavailable with Retry-After 1, before reading the upload;
+     * then the rest of the upload is read and dropped, as DocQL's gateway
+     * does, instead of HttpServer's 64 KiB drain and close, whose reset under
+     * the upload can cost the client this 503.
+     */
     private void earlyAnswer(HttpExchange exchange) throws IOException {
         try {
             if (!stream.stalling.await(5, TimeUnit.SECONDS)) {
@@ -201,6 +208,10 @@ class SubmitRewindTest {
         exchange.sendResponseHeaders(503, body.length);
         try (OutputStream out = exchange.getResponseBody()) {
             out.write(body);
+            out.flush();
+            try (InputStream in = exchange.getRequestBody()) {
+                in.transferTo(OutputStream.nullOutputStream());
+            }
         }
     }
 
