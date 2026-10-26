@@ -112,6 +112,96 @@ instances the synchronous call throws — surfacing as the cause of
 pre-send failure completes the future exceptionally. Cancelling the returned
 future cancels the underlying exchange, and the client stays usable.
 
+## Long documents: jobs
+
+Use a job for a long document: a proxied edge cuts a single call at about
+100–120 s, while `Mode.STANDARD` may take up to 540 s. `submitDocument` uploads
+the file and answers at once with a queued `Job`, and `waitFor` polls it until
+it finishes. Save the program below as `Jobs.java` and run it like the
+quickstart:
+
+<!-- docql:jobs:start -->
+```java
+// The README jobs example, kept byte-identical with the README's fenced block
+// by scripts/check-quickstart.sh. Set DOCQL_API_KEY, point DOCQL_API_URL at
+// the API origin you were given, put an invoice.pdf in the working directory,
+// and run it with the JDK source launcher and the classpath of the quickstart:
+//
+//   java -cp <the quickstart's classpath> Jobs.java
+
+import java.nio.file.Path;
+
+import com.finoniq.docql.DocFile;
+import com.finoniq.docql.DocQL;
+import com.finoniq.docql.DocQLConnectionException;
+import com.finoniq.docql.DocQLException;
+import com.finoniq.docql.DocQLWaitTimeoutException;
+import com.finoniq.docql.Instruction;
+import com.finoniq.docql.Job;
+
+public class Jobs {
+
+    public static void main(String[] args) {
+        DocQL client = DocQL.builder().build(); // reads DOCQL_API_KEY and DOCQL_API_URL
+        try {
+            Job job = client.submitDocument(
+                    DocFile.path(Path.of("invoice.pdf")),
+                    Instruction.query("{ invoice_number total_amount }"));
+            job = client.waitFor(job.jobId()); // polls until succeeded or cancelled
+            System.out.println(job.status());
+            if (job.result() != null) {
+                System.out.println(job.result().data());
+            }
+        } catch (DocQLException e) {
+            System.err.println("status " + e.status()
+                    + (e.reason() != null ? " reason " + e.reason() : "")
+                    + (e.jobId() != null ? " job id " + e.jobId() : "")
+                    + (e.requestId() != null ? " request id " + e.requestId() : ""));
+            System.exit(1);
+        } catch (DocQLWaitTimeoutException e) {
+            System.err.println("still running, not cancelled: job id " + e.jobId());
+            System.exit(1);
+        } catch (DocQLConnectionException e) {
+            System.err.println(e.getMessage());
+            System.exit(1);
+        }
+    }
+}
+```
+<!-- docql:jobs:end -->
+
+The same file is [`examples/Jobs.java`](examples/Jobs.java).
+
+- `getJob(jobId)` makes one poll and answers the job as it is; a `failed` job
+  is answered too (read `job.error()`), never thrown.
+- `cancelJob(jobId)` asks DocQL to cancel and answers the job at that moment,
+  which may still be `JobStatus.RUNNING`: poll to confirm.
+- `waitFor` (named so because `wait` is final on `Object`) answers a
+  `succeeded` or `cancelled` job and throws the job's `DocQLException` for a
+  `failed` one. It gives up after 15 minutes by default with
+  `DocQLWaitTimeoutException` (a `DocQLTimeoutException` carrying `jobId()`),
+  and never sends a poll at or past that deadline. Pass
+  `WaitOptions.builder().timeout(...).pollInterval(...).build()` to change the
+  deadline or the shortest sleep between polls. It never cancels the job, not
+  on a timeout and not on an interrupt: an interrupted `waitFor` throws
+  `DocQLConnectionException` and sets the thread's interrupt flag again, and
+  `getJob` or another `waitFor` picks the job up again.
+- Every submit carries an `Idempotency-Key`, generated for you unless you set
+  `QueryOptions.builder().idempotencyKey(...)`; it is on the returned job
+  (`idempotencyKey()`) and on every exception the submit throws
+  (`DocQLException.idempotencyKey()`, `DocQLConnectionException.idempotencyKey()`).
+  DocQL scopes the key to your organisation. Unlike `queryDocument`,
+  `submitDocument` retries a 503 and a 409 `idempotency_in_progress` with the
+  same key, at most 4 attempts in all (a 503 may mean the job was created
+  anyway), but only for input it can send again from its start:
+  `DocFile.path`, `DocFile.bytes`, or a `DocFile.stream` whose stream supports
+  mark/reset (a `BufferedInputStream` keeps up to `length` bytes in memory
+  meanwhile). Any other stream is sent once. A job that ended `failed`,
+  `job_interrupted` included, needs a new key: the old one replays the
+  failure.
+- `job.pagesDone()` stays 0 while DocQL runs OCR, so show progress as
+  indeterminate while a running job reports 0 pages done.
+
 ## Configuration
 
 `DocQL.builder()` carries the values below; a built client is immutable and
@@ -216,8 +306,8 @@ Every reason below is exported as a `Reasons` constant
 
 ## Retrying
 
-The SDK never retries — every call is billed. Retry yourself, only when the
-caught `DocQLException` reports `retryable()` true, sleeping
+`queryDocument` never retries — every call is billed. Retry it yourself, only
+when the caught `DocQLException` reports `retryable()` true, sleeping
 `retryAfter()` when it is greater than zero and a capped exponential backoff
 otherwise, with at most 5 attempts:
 

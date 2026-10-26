@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# scripts/run-readme.sh — run the README quickstart against the pinned stub.
+# scripts/run-readme.sh — run a README example (the quickstart or the jobs
+# example) against the pinned stub.
 #
 # Extracts the single fenced Java block between the docql:quickstart markers
-# of README.md, writes it as Quickstart.java into a fresh temporary directory
+# (or, with --block jobs, the docql:jobs markers) of README.md, writes it as
+# Quickstart.java (Jobs.java) into a fresh temporary directory
 # next to invoice.pdf (the golden kit's ascii-query document), and runs it
 # there with the JDK source launcher against the built jar plus its runtime
 # dependency classpath, with DOCQL_API_KEY and DOCQL_API_URL set explicitly
@@ -11,13 +13,17 @@
 #
 # Usage:
 #   scripts/stub-up.sh --run scripts/run-readme.sh [--readme PATH] [--classpath CP]
+#       [--block quickstart|jobs]
+#
+# --block defaults to quickstart.
 #
 # Requires DOCQL_STUB_URL. The default classpath is target/docql-<VERSION>.jar
 # plus the runtime scope built with the maven-dependency-plugin;
 # --classpath CP replaces it entirely.
 #
-# Prints README_QUICKSTART_OK on success and README_QUICKSTART_MISSING when a
-# marker or the fenced block is unusable. Exits non-zero on any failure.
+# Prints README_QUICKSTART_OK (README_JOBS_OK for --block jobs) on success and
+# README_QUICKSTART_MISSING (README_JOBS_MISSING) when a marker or the fenced
+# block is unusable. Exits non-zero on any failure.
 
 set -euo pipefail
 
@@ -26,6 +32,7 @@ ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 
 README="$ROOT/README.md"
 CP=""
+BLOCK=quickstart
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --readme)
@@ -38,8 +45,16 @@ while [ "$#" -gt 0 ]; do
       CP=$2
       shift 2
       ;;
+    --block)
+      [ "$#" -ge 2 ] || { echo "--block needs quickstart or jobs" >&2; exit 2; }
+      case "$2" in
+        quickstart|jobs) BLOCK=$2 ;;
+        *) echo "--block needs quickstart or jobs" >&2; exit 2 ;;
+      esac
+      shift 2
+      ;;
     *)
-      echo "usage: scripts/run-readme.sh [--readme PATH] [--classpath CP]" >&2
+      echo "usage: scripts/run-readme.sh [--readme PATH] [--classpath CP] [--block quickstart|jobs]" >&2
       exit 2
       ;;
   esac
@@ -51,11 +66,23 @@ if [ -z "$STUB_URL" ]; then
   exit 1
 fi
 
-START='<!-- docql:quickstart:start -->'
-END='<!-- docql:quickstart:end -->'
+case "$BLOCK" in
+  quickstart)
+    FILE=Quickstart.java
+    TAG=README_QUICKSTART
+    LABEL=quickstart
+    ;;
+  jobs)
+    FILE=Jobs.java
+    TAG=README_JOBS
+    LABEL="jobs example"
+    ;;
+esac
+START="<!-- docql:$BLOCK:start -->"
+END="<!-- docql:$BLOCK:end -->"
 
 missing() {
-  echo "README_QUICKSTART_MISSING" >&2
+  echo "${TAG}_MISSING" >&2
   exit 1
 }
 
@@ -81,7 +108,7 @@ close=$(head -n 1 "$TMP/closes")
 [ "$open" -lt "$close" ] || missing
 [ "$((close - open))" -gt 1 ] || missing
 
-sed -n "$((open + 1)),$((close - 1))p" "$README" > "$TMP/Quickstart.java"
+sed -n "$((open + 1)),$((close - 1))p" "$README" > "$TMP/$FILE"
 
 # invoice.pdf is the golden kit's ascii-query document; the key comes from
 # the vendored case list, so the run needs no real credential.
@@ -109,15 +136,15 @@ export DOCQL_API_KEY="$API_KEY"
 export DOCQL_API_URL="$STUB_URL"
 
 set +e
-out=$(cd "$TMP" && timeout 120 "$JAVA" -cp "$CP" Quickstart.java 2>"$TMP/quickstart.stderr")
+out=$(cd "$TMP" && timeout 120 "$JAVA" -cp "$CP" "$FILE" 2>"$TMP/example.stderr")
 status=$?
 set -e
 if [ "$status" -ne 0 ]; then
-  cat "$TMP/quickstart.stderr" >&2
-  echo "the README quickstart failed (exit $status)" >&2
+  cat "$TMP/example.stderr" >&2
+  echo "the README $LABEL failed (exit $status)" >&2
   exit 1
 fi
 if [ -n "$out" ]; then
   printf '%s\n' "$out"
 fi
-echo "README_QUICKSTART_OK"
+echo "${TAG}_OK"

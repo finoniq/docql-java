@@ -5,7 +5,8 @@
 # the vendored case count, the nine Java-only live checks and a clean failsafe report,
 # plus the README quickstart (contract-cases), and it is reusable so release.yml runs
 # it on a tag. Since v0.2 the same run also gates the kit v3 stub job cases
-# (JOB_CONTRACT_CASE_OK lines and JOB_CONTRACT_CASES_RAN against the jq count).
+# (JOB_CONTRACT_CASE_OK lines and JOB_CONTRACT_CASES_RAN against the jq count)
+# and runs the README jobs example after the quickstart.
 name: contract
 
 on:
@@ -98,3 +99,5 @@ jobs:
           echo "contract-cases: $ran/$WANT cases, $ran_jobs/$WANT_JOBS job cases, extras ok"
       - name: README quickstart
         run: scripts/stub-up.sh --run scripts/run-readme.sh
+      - name: README jobs example
+        run: scripts/stub-up.sh --run scripts/run-readme.sh --block jobs
