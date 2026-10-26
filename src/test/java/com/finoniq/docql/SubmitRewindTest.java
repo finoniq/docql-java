@@ -9,11 +9,13 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InterruptedIOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
@@ -289,5 +291,62 @@ class SubmitRewindTest {
             interrupter.join();
             Thread.interrupted();
         }
+    }
+
+    /**
+     * The early 503 must leave the connection the way DocQL's servers do:
+     * the gateway reads and drops the rest of an upload it has already
+     * answered ({@code dropUnreadUpload}, {@code lingeringClose}) and Go's
+     * server lingers; neither resets a connection under an upload. A JDK
+     * HttpServer handler that never reads the body gets 64 KiB drained and
+     * the connection closed on the rest, and that reset can cost the SDK the
+     * 503 it already received: the JDK 17/21 CI failure of the test above,
+     * whose HttpServer sends the 503 head and body in separate segments. A
+     * raw client reads the 503, sends the rest of the upload, then the
+     * same-key retry on the same connection, and must get the 202.
+     */
+    @Test
+    void theEarlyAnswerReadsTheRestOfTheUploadSoItsConnectionCarriesTheRetry() throws IOException {
+        stream.stalling.countDown(); // earlyAnswer's precondition: a client inside its stalled read
+        byte[] head = ("POST " + Jobs.JOBS_PATH + " HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: " + DATA.length
+                + "\r\n\r\n").getBytes(StandardCharsets.ISO_8859_1);
+        try (Socket socket = new Socket("127.0.0.1", server.getAddress().getPort())) {
+            socket.setSoTimeout(10_000);
+            OutputStream out = socket.getOutputStream();
+            InputStream in = socket.getInputStream();
+            out.write(head);
+            out.flush();
+            assertEquals(503, answerStatus(in), "the early answer, before any of the upload");
+            out.write(DATA);
+            out.write(head);
+            out.write(DATA);
+            out.flush();
+            assertEquals(202, answerStatus(in), "the same-key retry on the connection that carried the upload");
+        }
+        assertEquals(2, submits.get());
+    }
+
+    /** Reads one answer off a raw HTTP/1.1 connection, its body by Content-Length, and returns its status. */
+    private static int answerStatus(InputStream in) throws IOException {
+        ByteArrayOutputStream head = new ByteArrayOutputStream();
+        int matched = 0;
+        while (matched < 4) {
+            int b = in.read();
+            if (b < 0) {
+                throw new IOException("the connection ended before an answer");
+            }
+            head.write(b);
+            matched = b == "\r\n\r\n".charAt(matched) ? matched + 1 : (b == '\r' ? 1 : 0);
+        }
+        String[] lines = head.toString(StandardCharsets.ISO_8859_1).split("\r\n");
+        int length = 0;
+        for (String line : lines) {
+            int colon = line.indexOf(':');
+            if (colon > 0 && "content-length".equalsIgnoreCase(line.substring(0, colon).trim())) {
+                length = Integer.parseInt(line.substring(colon + 1).trim());
+            }
+        }
+        in.readNBytes(length);
+        return Integer.parseInt(lines[0].split(" ")[1]);
     }
 }
