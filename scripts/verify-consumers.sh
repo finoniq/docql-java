@@ -3,8 +3,9 @@
 #
 # Builds a throwaway Maven project and a throwaway Gradle 9 project that depend
 # on com.finoniq:docql:<version>, checks the resolved jar (bytecode major 61 and
-# Automatic-Module-Name: com.finoniq.docql), and runs the README quickstart on
-# each project's resolved classpath against the pinned stub. Proves D-15 step 1
+# Automatic-Module-Name: com.finoniq.docql), and runs the README quickstart and
+# the README jobs example on each project's resolved classpath against the
+# pinned stub. Proves D-15 step 1
 # (resolve from a local install) and, after the owner presses Publish, the
 # Central release itself (D-16); verify-central.yml runs this script with
 # --source central.
@@ -19,7 +20,7 @@
 # fresh empty repository, so the artifact has to come from Central.
 #
 # Requires DOCQL_STUB_URL (boot the pinned stub with scripts/stub-up.sh) before
-# the quickstart runs. JAVA_HOME selects the JDK; GRADLE (default "gradle") the
+# the README examples run. JAVA_HOME selects the JDK; GRADLE (default "gradle") the
 # Gradle binary. Versions are exact strings, never echoed beyond the argument
 # check, and no environment values are printed.
 set -euo pipefail
@@ -165,6 +166,7 @@ PYEOF
 echo "JAR_SHAPE_OK"
 echo "MAVEN_CONSUMER_OK"
 scripts/run-readme.sh --classpath "$CP_M"
+"$ROOT/scripts/run-readme.sh" --block jobs --classpath "$CP_M"
 
 # --- Gradle consumer --------------------------------------------------------
 CONS_G="$WORK/gradle-consumer"
@@ -206,5 +208,6 @@ if ! printf '%s' "$CP_G" | grep -q "docql-$VERSION.jar"; then
 fi
 echo "GRADLE_CONSUMER_OK"
 scripts/run-readme.sh --classpath "$CP_G"
+"$ROOT/scripts/run-readme.sh" --block jobs --classpath "$CP_G"
 
 echo "CONSUMERS_OK"

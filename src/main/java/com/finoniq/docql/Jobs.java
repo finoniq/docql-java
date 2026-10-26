@@ -45,8 +45,8 @@ import java.util.function.Supplier;
  * <li>OD-5: the wait gives up when the next sleep would pass the deadline
  * (15 minutes by default) and throws {@link DocQLWaitTimeoutException}. It
  * never polls at or past the deadline: a sleep that ends exactly on it ends
- * the wait too (as in Go; Python and the kit runner poll once more at that
- * instant, an edge no kit case reaches).</li>
+ * the wait too (as in Go and Python; the kit's reference runner polls once
+ * more at that instant, an edge no kit case reaches).</li>
  * </ul>
  * The wait never cancels the job, on any path, interrupts included.
  */

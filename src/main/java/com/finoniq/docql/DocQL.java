@@ -29,7 +29,10 @@ import java.util.function.Supplier;
  * <p>Build one with {@link #builder()}; every value is explicit, an
  * {@code DOCQL_API_KEY} / {@code DOCQL_API_URL} fallback, or the production
  * default URL. A {@code DocQL} client is immutable and thread-safe. It needs
- * no closing. Calls are paid: nothing here retries.
+ * no closing. Calls are paid: {@link #queryDocument(DocFile, Instruction)}
+ * never retries, and {@link #submitDocument(DocFile, Instruction, QueryOptions)}
+ * retries only a 503 or a 409 {@code idempotency_in_progress}, with the same
+ * idempotency key.
  *
  * <p>Long documents run as async jobs (JSDK-01):
  * {@link #submitDocument(DocFile, Instruction)} answers at once with a
@@ -40,7 +43,7 @@ import java.util.function.Supplier;
 public final class DocQL {
 
     /** The SDK version, reported in the User-Agent of every request. */
-    public static final String VERSION = "0.1.0";
+    public static final String VERSION = "0.2.0";
 
     static final String DEFAULT_API_URL = "https://api-docql.finoniq.com";
     static final String ENV_API_KEY = "DOCQL_API_KEY";

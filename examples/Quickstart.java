@@ -3,7 +3,7 @@
 // the API origin you were given, put an invoice.pdf in the working directory,
 // and run it with the JDK source launcher:
 //
-//   java -cp docql-0.1.0.jar:jackson-databind-2.21.7.jar:jackson-core-2.21.7.jar:jackson-annotations-2.21.jar Quickstart.java
+//   java -cp docql-0.2.0.jar:jackson-databind-2.21.7.jar:jackson-core-2.21.7.jar:jackson-annotations-2.21.jar Quickstart.java
 
 import java.nio.file.Path;
 
