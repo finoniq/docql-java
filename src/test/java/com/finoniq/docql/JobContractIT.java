@@ -15,6 +15,7 @@ import org.junit.jupiter.api.TestFactory;
 
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.Authenticator;
 import java.net.CookieHandler;
 import java.net.ProxySelector;
@@ -24,13 +25,17 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.GeneralSecurityException;
+import java.security.KeyStore;
 import java.security.SecureRandom;
+import java.security.cert.CertificateFactory;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -48,6 +53,7 @@ import java.util.stream.Stream;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
+import javax.net.ssl.TrustManagerFactory;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -100,6 +106,18 @@ import static org.junit.jupiter.api.Assertions.fail;
  * {@code JOB_CONTRACT_CASE_OK <id>}, and the class prints
  * {@code JOB_CONTRACT_CASES_RAN <n>} once when all of them passed; CI's
  * contract.yml requires both to equal the jq count.
+ *
+ * <p>Edge mode ({@code DOCQL_CONTRACT_EDGE=1}, 26-11): docql-console
+ * {@code deploy/scripts/sdk-jobs-edge.sh} runs {@link #jobCasesAgainstTheStub}
+ * through Caddy -> gateway -> stub. Only the case ids in
+ * {@code DOCQL_EDGE_CASE_IDS} run (the ones the console's Node edge runner
+ * replayed); keys {@code valid} and {@code validOther} become the gateway keys
+ * in {@code DOCQL_EDGE_KEY} (test org 1) and {@code DOCQL_EDGE_KEY_OTHER}
+ * (test org 2), so the cross-org cases prove the gateway's tenant;
+ * {@code invalid} stays the kit's never-issued key; TLS trusts only the Caddy
+ * root CA in {@code DOCQL_EDGE_CA}. There is no kit gate (Caddy exposes no
+ * {@code /__stub} routes, and ContractIT does not run in edge mode). Outside
+ * edge mode nothing changes.
  */
 class JobContractIT {
 
@@ -110,8 +128,30 @@ class JobContractIT {
 
     private static String base;
 
+    private static final boolean EDGE = "1".equals(System.getenv("DOCQL_CONTRACT_EDGE"));
+    /** The API key each kit key name sends: the kit's, or in edge mode the gateway keys. */
+    private static final Map<String, String> KEYS = new HashMap<>();
+    /** In edge mode, the case ids to run; null otherwise. */
+    private static Set<String> edgeIds;
+    /** In edge mode, a TLS context that trusts only the Caddy root CA; null otherwise. */
+    private static SSLContext edgeTls;
+
     @BeforeAll
     static void resolveStub() {
+        for (String name : List.of("valid", "validOther", "invalid")) {
+            KEYS.put(name, Kit.jobCases().path("keys").path(name).asText());
+        }
+        if (EDGE) {
+            KEYS.put("valid", edgeEnv("DOCQL_EDGE_KEY"));
+            KEYS.put("validOther", edgeEnv("DOCQL_EDGE_KEY_OTHER"));
+            edgeIds = new LinkedHashSet<>();
+            for (String id : edgeEnv("DOCQL_EDGE_CASE_IDS").split(",")) {
+                if (!id.isEmpty()) {
+                    edgeIds.add(id);
+                }
+            }
+            edgeTls = trustOnly(Path.of(edgeEnv("DOCQL_EDGE_CA")));
+        }
         String url = System.getenv("DOCQL_STUB_URL");
         if (url == null || url.isBlank()) {
             if ("1".equals(System.getenv("DOCQL_REQUIRE_STUB"))) {
@@ -121,6 +161,31 @@ class JobContractIT {
             return;
         }
         base = url.replaceAll("/+$", "");
+    }
+
+    /** An edge-mode input; a missing one fails the class, never a silent skip. */
+    private static String edgeEnv(String name) {
+        String value = System.getenv(name);
+        if (value == null || value.isEmpty()) {
+            fail("edge mode (DOCQL_CONTRACT_EDGE=1) needs env " + name);
+        }
+        return value;
+    }
+
+    /** A TLS context whose only trust anchor is the PEM certificate in {@code caFile}. */
+    private static SSLContext trustOnly(Path caFile) {
+        try (InputStream in = Files.newInputStream(caFile)) {
+            KeyStore store = KeyStore.getInstance(KeyStore.getDefaultType());
+            store.load(null, null);
+            store.setCertificateEntry("caddy-root", CertificateFactory.getInstance("X.509").generateCertificate(in));
+            TrustManagerFactory trust = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+            trust.init(store);
+            SSLContext tls = SSLContext.getInstance("TLS");
+            tls.init(null, trust.getTrustManagers(), null);
+            return tls;
+        } catch (IOException | GeneralSecurityException e) {
+            return fail("DOCQL_EDGE_CA " + caFile + " is not a usable CA certificate: " + e);
+        }
     }
 
     private static String runToken() {
@@ -190,6 +255,25 @@ class JobContractIT {
         return cases;
     }
 
+    /** The cases jobCasesAgainstTheStub runs: every one, or in edge mode the edge-replayed subset. */
+    private static List<JsonNode> runCases() {
+        List<JsonNode> cases = jobCases();
+        if (edgeIds == null) {
+            return cases;
+        }
+        List<JsonNode> out = new ArrayList<>();
+        List<String> unknown = new ArrayList<>(edgeIds);
+        for (JsonNode c : cases) {
+            String id = c.path("id").asText();
+            if (edgeIds.contains(id)) {
+                out.add(c);
+                unknown.remove(id);
+            }
+        }
+        assertEquals(List.of(), unknown, "DOCQL_EDGE_CASE_IDS names cases this runner does not run");
+        return out;
+    }
+
     private static String classify(JsonNode c) {
         if ("stub".equals(c.path("target").asText()) && RUN_VIAS.contains(c.path("via").asText())) {
             return "run";
@@ -227,7 +311,7 @@ class JobContractIT {
             return Stream.empty();
         }
         List<DynamicTest> tests = new ArrayList<>();
-        for (JsonNode c : jobCases()) {
+        for (JsonNode c : runCases()) {
             String id = c.path("id").asText();
             tests.add(DynamicTest.dynamicTest(id, () -> {
                 new CaseRunner(c).run();
@@ -248,7 +332,7 @@ class JobContractIT {
         if (base == null) {
             return;
         }
-        int want = jobCases().size();
+        int want = runCases().size();
         assertEquals(want, RAN.get(), "ran " + RAN.get() + " of the " + want
                 + " stub job cases: a case stopped before its last check");
         System.out.println("JOB_CONTRACT_CASES_RAN " + RAN.get());
@@ -427,7 +511,7 @@ class JobContractIT {
 
         private final JsonNode c;
         private final String caseId;
-        private final CapturingClient http = new CapturingClient();
+        private final CapturingClient http = new CapturingClient(edgeTls);
         private final Map<String, String> jobs = new ConcurrentHashMap<>();
         private final Map<String, Pending> pending = new HashMap<>();
         private final Map<String, Jobs.Answer> captured = new HashMap<>();
@@ -445,7 +529,7 @@ class JobContractIT {
             if (!List.of("valid", "validOther", "invalid").contains(name)) {
                 throw new CaseError(where + ": key " + name + " is not one the SDK can send");
             }
-            return Kit.jobCases().path("keys").path(name).asText();
+            return KEYS.get(name);
         }
 
         /** A client on this case's transport with the step's boundary (else the kit default). */
@@ -1211,15 +1295,27 @@ class JobContractIT {
      * The SDK's own transport settings (HTTP/1.1, no redirects, 10 s
      * connect), plus a record of every request and its answer. The SDK reads
      * every body as bytes, so the record keeps the exact bytes it decoded.
+     * Given a TLS context (edge mode), the delegate trusts only it.
      */
     static final class CapturingClient extends HttpClient {
 
-        private final HttpClient delegate = HttpClient.newBuilder()
-                .version(HttpClient.Version.HTTP_1_1)
-                .followRedirects(HttpClient.Redirect.NEVER)
-                .connectTimeout(Duration.ofSeconds(10))
-                .build();
+        private final HttpClient delegate;
         private final List<Seen> seen = new CopyOnWriteArrayList<>();
+
+        CapturingClient() {
+            this(null);
+        }
+
+        CapturingClient(SSLContext tls) {
+            HttpClient.Builder builder = HttpClient.newBuilder()
+                    .version(HttpClient.Version.HTTP_1_1)
+                    .followRedirects(HttpClient.Redirect.NEVER)
+                    .connectTimeout(Duration.ofSeconds(10));
+            if (tls != null) {
+                builder.sslContext(tls);
+            }
+            delegate = builder.build();
+        }
 
         List<Seen> seen() {
             return seen;
