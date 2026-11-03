@@ -4,9 +4,9 @@
 # sync after the owner's Publish click can take up to about an hour — and then
 # proves the release from a clean machine: verify-consumers.sh resolves
 # com.finoniq:docql:<version> from Maven Central in a fresh Maven project and a
-# fresh Gradle 9 project and runs the README quickstart against the pinned stub
-# (RELEASE_VERIFY_OK). A second job creates the GitHub Release from the
-# CHANGELOG section, idempotently (Go review IN-09b).
+# fresh Gradle 9 project and runs the README quickstart and jobs example
+# against the pinned stub (RELEASE_VERIFY_OK). A second job creates the GitHub
+# Release from the CHANGELOG section, idempotently (Go review IN-09b).
 #
 # It is deliberately not chained to release.yml: the owner's Publish click time
 # is unbounded, so the verify runs when the owner says the publish happened.
@@ -81,7 +81,7 @@ jobs:
             exit 1
           fi
           echo "REPO1_BUNDLE_OK: the POM, jar, sources and javadoc jars and their signatures are live"
-      - name: consumer verification from Central (fresh Maven + Gradle, README quickstart)
+      - name: consumer verification from Central (fresh Maven + Gradle, README quickstart and jobs example)
         run: |
           set -euo pipefail
           gradle --version
