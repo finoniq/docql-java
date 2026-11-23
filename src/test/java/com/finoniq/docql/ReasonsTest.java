@@ -18,11 +18,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The reason constants (D-04, D-09): {@link Reasons} holds exactly 22 public
- * static final String constants whose literal values are the stub
- * REASON_TEXTS, the gateway ERROR_CLASSES and the job reasons — pinned here
- * as literals, because the SDK repo must not reference the private console
- * sources, and proven equal to the reasons of the vendored kit files.
+ * The reason constants (D-04, D-09, D-12): {@link Reasons} holds exactly 25
+ * public static final String constants whose literal values are the stub
+ * REASON_TEXTS, the gateway ERROR_CLASSES, the job reasons and the kit v5
+ * spreadsheet reasons — pinned here as literals, because the SDK repo must
+ * not reference the private console sources, and proven equal to the reasons
+ * of the vendored kit files.
  */
 class ReasonsTest {
 
@@ -51,10 +52,13 @@ class ReasonsTest {
         expected.put("IDEMPOTENCY_KEY_CONFLICT", "idempotency_key_conflict");
         expected.put("IDEMPOTENCY_IN_PROGRESS", "idempotency_in_progress");
         expected.put("JOB_INTERRUPTED", "job_interrupted");
+        expected.put("DOCUMENT_TOO_COMPLEX", "document_too_complex");
+        expected.put("SPREADSHEET_TOO_LARGE", "spreadsheet_too_large");
+        expected.put("TOO_MANY_PAGES", "too_many_pages");
 
         List<Field> constants = constants();
         assertEquals(expected.size(), constants.size(),
-                "Reasons holds exactly 22 public static final String constants, found " + constants);
+                "Reasons holds exactly 25 public static final String constants, found " + constants);
 
         Set<String> values = new HashSet<>();
         for (Map.Entry<String, String> entry : expected.entrySet()) {
@@ -70,10 +74,11 @@ class ReasonsTest {
     }
 
     /**
-     * The constant values are exactly the non-null reasons the two vendored
-     * kit files name: sdk-cases.json cases and decodeCases, and job-cases.json
+     * The constant values are exactly the non-null reasons the three vendored
+     * kit files name: sdk-cases.json cases and decodeCases, job-cases.json
      * reasons.entries, decodeCases, every case step's reason and
-     * embeddedReason, and waitCases.
+     * embeddedReason, and waitCases, and sheet-cases.json cases and every
+     * fixture answer.
      */
     @Test
     void reasonValuesEqualTheVendoredKitReasons() throws Exception {
@@ -99,6 +104,13 @@ class ReasonsTest {
         }
         for (JsonNode c : job.path("waitCases")) {
             add(kit, c.path("expect").path("reason"));
+        }
+        JsonNode sheet = Kit.sheetCases();
+        for (JsonNode c : sheet.path("cases")) {
+            add(kit, c.path("expect").path("reason"));
+        }
+        for (JsonNode fixture : sheet.path("fixtures")) {
+            add(kit, fixture.path("answer").path("reason"));
         }
 
         Set<String> values = new TreeSet<>();

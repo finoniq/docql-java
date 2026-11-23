@@ -7,6 +7,11 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.math.BigInteger;
 import java.net.http.HttpHeaders;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -273,6 +278,9 @@ class DecodeTest {
                 assertEquals(job.jobId(), error.jobId(), id + ": error jobId");
                 assertFalse(error.retryable(), id + ": a failed job is final");
                 assertNull(error.idempotencyKey(), id + ": no key on a polled error");
+                JsonNode rawMetadata = rawError.path("metadata");
+                assertEquals(rawMetadata.isObject() ? rawMetadata : MAPPER.createObjectNode(), error.metadata(),
+                        id + ": the failed job's error metadata");
             } else {
                 assertNull(job.error(), id + ": no error unless failed");
             }
@@ -505,5 +513,175 @@ class DecodeTest {
         assertNull(e.reason());
         assertFalse(e.retryable());
         assertTrue(e.getMessage().startsWith("302 (non-DocQL response): "), e.getMessage());
+    }
+
+    /** A 422 refusal body like the stub's: error_info, status_code and the sorted metadata. */
+    private static String refusal(String metadataJson) {
+        return "{\"error_info\":\"refused\",\"status_code\":422,\"metadata\":" + metadataJson + "}";
+    }
+
+    /** SSDK-02: spreadsheet_too_large carries the measured value under its axis key and the limit. */
+    @Test
+    void metadataSpreadsheetTooLarge() {
+        DocQLException e = decode(422, Map.of(), refusal("{\"estimated_output_tokens\":9001,\"limit\":9000,"
+                + "\"reason\":\"spreadsheet_too_large\",\"request_id\":\"r-1\"}"), TEST_KEY);
+        assertEquals("spreadsheet_too_large", e.reason());
+        assertEquals(9001L, e.metadata().path("estimated_output_tokens").asLong());
+        assertEquals(9000L, e.metadata().path("limit").asLong());
+        assertEquals("spreadsheet_too_large", e.metadata().path("reason").asText());
+        assertEquals("r-1", e.metadata().path("request_id").asText());
+    }
+
+    /** too_many_pages fills {limit, pages} the same way. */
+    @Test
+    void metadataTooManyPages() {
+        DocQLException e = decode(422, Map.of(),
+                refusal("{\"limit\":2,\"pages\":3,\"reason\":\"too_many_pages\",\"request_id\":\"r-2\"}"), TEST_KEY);
+        assertEquals("too_many_pages", e.reason());
+        assertEquals(3L, e.metadata().path("pages").asLong());
+        assertEquals(2L, e.metadata().path("limit").asLong());
+    }
+
+    /** The metadata of every other reason is kept too, and a metadata object without a reason (D-12). */
+    @Test
+    void metadataIsNeverGatedOnReason() {
+        DocQLException other = decode(422, Map.of(),
+                refusal("{\"reason\":\"corrupted_file\",\"detail\":\"zip\"}"), TEST_KEY);
+        assertEquals("zip", other.metadata().path("detail").asText());
+        DocQLException noReason = decode(500, Map.of(), "{\"metadata\":{\"limit\":5}}", TEST_KEY);
+        assertNull(noReason.reason());
+        assertEquals(5L, noReason.metadata().path("limit").asLong());
+    }
+
+    /** Integers stay exact: the long maximum reads back as Long.MAX_VALUE, a larger one as a BigInteger. */
+    @Test
+    void metadataKeepsLongMaxValueAndBigIntegers() {
+        DocQLException max = decode(422, Map.of(), refusal("{\"bytes\":9223372036854775807,\"limit\":5000000,"
+                + "\"reason\":\"spreadsheet_too_large\"}"), TEST_KEY);
+        assertTrue(max.metadata().path("bytes").canConvertToLong());
+        assertEquals(Long.MAX_VALUE, max.metadata().path("bytes").asLong());
+        DocQLException big = decode(422, Map.of(), refusal("{\"bytes\":18446744073709551616,\"limit\":5000000,"
+                + "\"reason\":\"spreadsheet_too_large\"}"), TEST_KEY);
+        assertTrue(big.metadata().path("bytes").isBigInteger());
+        assertEquals(new BigInteger("18446744073709551616"), big.metadata().path("bytes").bigIntegerValue());
+    }
+
+    /** T-45-19: the key is scrubbed from field names and text values at every depth. */
+    @Test
+    void metadataScrubsTheKeyFromNamesAndValues() {
+        String key = "dql_metadata_secret_key";
+        DocQLException e = decode(422, Map.of(), refusal("{\"reason\":\"invalid_params\",\"echo\":\"sent " + key
+                + "\",\"" + key + "\":1,\"nested\":{\"in_" + key + "\":\"" + key + "\"},\"list\":[\"" + key
+                + "\",7]}"), key);
+        JsonNode m = e.metadata();
+        assertFalse(m.toString().contains(key), "the key survived in metadata(): " + m);
+        assertEquals("sent ***", m.path("echo").asText());
+        assertEquals(1, m.path("***").asInt());
+        assertEquals("***", m.path("nested").path("in_***").asText());
+        assertEquals("***", m.path("list").path(0).asText());
+        assertEquals(7, m.path("list").path(1).asInt());
+    }
+
+    /** The metadata never enters getMessage(): the message equals the one of the same error without it. */
+    @Test
+    void metadataNeverEntersTheMessage() {
+        DocQLException e = decode(422, Map.of(), refusal("{\"reason\":\"spreadsheet_too_large\",\"request_id\":\"r-3\","
+                + "\"note\":\"metadata-only-value\\nforged line\",\"limit\":557,\"cells\":558}"), TEST_KEY);
+        DocQLException without = new DocQLException(e.status(), e.reason(), e.requestId(), e.retryAfter(),
+                e.retryable(), e.serverMessage(), e.body(), e.jobId(), e.idempotencyKey());
+        assertTrue(without.metadata().isEmpty());
+        assertEquals(without.getMessage(), e.getMessage());
+        assertFalse(e.getMessage().contains("metadata-only-value"), e.getMessage());
+    }
+
+    /** The metadata is parsed from the whole bounded body, before body() is cut at 2048 characters. */
+    @Test
+    void metadataIsReadPastTheBodyCut() {
+        String body = "{\"error_info\":\"" + "x".repeat(3000) + "\",\"status_code\":422,"
+                + "\"metadata\":{\"cells\":558,\"limit\":557,\"reason\":\"spreadsheet_too_large\"}}";
+        DocQLException e = decode(422, Map.of(), body, TEST_KEY);
+        assertTrue(e.body().length() <= 2048, "body() kept " + e.body().length() + " characters");
+        assertEquals(558L, e.metadata().path("cells").asLong());
+    }
+
+    /** metadata() is a non-null empty object whenever the body carries no metadata object. */
+    @Test
+    void metadataIsAnEmptyObjectOtherwise() {
+        String[] bodies = {"", "<html>busy</html>", "{\"error_info\":\"boom\"}", "{\"metadata\":[1,2]}",
+            "{\"metadata\":null}", "{\"metadata\":\"limit\"}", "[{\"metadata\":{\"limit\":1}}]",
+            "{\"metadata\":{\"limit\":1}"};
+        for (String body : bodies) {
+            JsonNode m = decode(422, Map.of(), body, TEST_KEY).metadata();
+            assertNotNull(m, "body " + body);
+            assertTrue(m.isObject() && m.isEmpty(), "body " + body + ": metadata " + m);
+        }
+        JsonNode seven = new DocQLException(500, null, null, null, false, null, "").metadata();
+        assertTrue(seven.isObject() && seven.isEmpty(), "the 7-argument constructor");
+        JsonNode nine = new DocQLException(500, null, null, null, false, null, "", "job_1", "k").metadata();
+        assertTrue(nine.isObject() && nine.isEmpty(), "the 9-argument constructor");
+        DocQLException unusable = assertThrows(DocQLException.class, () -> Decoder.parseResult(200,
+                httpHeaders(Map.of()), "{\"metadata\":{\"limit\":1}".getBytes(StandardCharsets.UTF_8), TEST_KEY));
+        assertTrue(unusable.metadata().isObject() && unusable.metadata().isEmpty(), "the unusable 2xx");
+        JsonNode unusableJob = assertThrows(DocQLException.class, () -> Jobs.parseJob(202, httpHeaders(Map.of()),
+                "not json".getBytes(StandardCharsets.UTF_8), TEST_KEY, null)).metadata();
+        assertTrue(unusableJob.isObject() && unusableJob.isEmpty(), "the unusable job answer");
+    }
+
+    /** withJob keeps the metadata, as it keeps every other field. */
+    @Test
+    void withJobKeepsTheMetadata() {
+        DocQLException e = decode(422, Map.of(), refusal("{\"limit\":2,\"pages\":3,\"reason\":\"too_many_pages\"}"),
+                TEST_KEY);
+        DocQLException job = e.withJob("job_1", "idem-1", false);
+        assertEquals(e.metadata(), job.metadata());
+        assertEquals(3L, job.metadata().path("pages").asLong());
+        assertEquals("job_1", job.jobId());
+    }
+
+    /** T-45-20: an ObjectOutputStream/ObjectInputStream round trip keeps the metadata equal. */
+    @Test
+    void metadataSurvivesJavaSerialization() throws Exception {
+        DocQLException e = decode(422, Map.of(), refusal("{\"bytes\":9223372036854775807,\"limit\":5000000,"
+                + "\"reason\":\"spreadsheet_too_large\",\"nested\":{\"a\":[1,\"b\"]}}"), TEST_KEY);
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (ObjectOutputStream out = new ObjectOutputStream(bytes)) {
+            out.writeObject(e);
+        }
+        DocQLException copy;
+        try (ObjectInputStream in = new ObjectInputStream(new ByteArrayInputStream(bytes.toByteArray()))) {
+            copy = (DocQLException) in.readObject();
+        }
+        assertEquals(e.metadata(), copy.metadata());
+        assertEquals(Long.MAX_VALUE, copy.metadata().path("bytes").asLong());
+        assertEquals(e.getMessage(), copy.getMessage());
+    }
+
+    /**
+     * Every route fills the metadata: the sync call, the submit, and the
+     * poll, wait and cancel of a job (whose errors pass through withJob).
+     */
+    @Test
+    void metadataOnEveryRoute() throws Exception {
+        String body = refusal("{\"limit\":2,\"pages\":3,\"reason\":\"too_many_pages\",\"request_id\":\"r-9\"}");
+        FakeServer server = new FakeServer();
+        try {
+            server.enqueue(422, body).enqueue(422, body).enqueue(422, body).enqueue(422, body).enqueue(422, body);
+            DocQL client = DocQL.builder().apiKey("k").apiUrl(server.url()).build();
+            DocFile file = DocFile.bytes(new byte[] {1}, "f.csv");
+            List<DocQLException> errors = List.of(
+                    assertThrows(DocQLException.class, () -> client.queryDocument(file, Instruction.query("q"))),
+                    assertThrows(DocQLException.class, () -> client.submitDocument(file, Instruction.query("q"))),
+                    assertThrows(DocQLException.class, () -> client.getJob("job_1")),
+                    assertThrows(DocQLException.class, () -> client.waitFor("job_1")),
+                    assertThrows(DocQLException.class, () -> client.cancelJob("job_1")));
+            for (DocQLException e : errors) {
+                assertEquals("too_many_pages", e.reason());
+                assertEquals(3L, e.metadata().path("pages").asLong(), e.getMessage());
+                assertEquals(2L, e.metadata().path("limit").asLong(), e.getMessage());
+            }
+            assertEquals(5, server.requestCount());
+        } finally {
+            server.close();
+        }
     }
 }

@@ -1,5 +1,7 @@
 package com.finoniq.docql;
 
+import com.fasterxml.jackson.databind.JsonNode;
+
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
@@ -182,6 +184,9 @@ class SurfaceTest {
             }
             assertEquals(entry.getValue(), got, entry.getKey() + " public method drift");
         }
+
+        assertEquals(JsonNode.class, DocQLException.class.getMethod("metadata").getReturnType(),
+                "DocQLException.metadata() returns the raw JsonNode (SSDK-02, D-06)");
 
         assertTrue(!types.get("Job").isRecord() && Modifier.isFinal(types.get("Job").getModifiers()),
                 "Job must be a final class, not a record (JSDK-03)");
