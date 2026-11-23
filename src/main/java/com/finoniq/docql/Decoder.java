@@ -5,6 +5,9 @@ import com.fasterxml.jackson.core.StreamReadConstraints;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.json.JsonMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.databind.node.TextNode;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -15,6 +18,7 @@ import java.time.Instant;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.util.Map;
 
 /**
  * Pure decode of a queryDocument response (D-04, D-06, D-11): a 2xx body
@@ -94,17 +98,22 @@ final class Decoder {
      * is an object with a string reason. Retry-After is parsed on every
      * non-2xx; retryable is true only for 429 and 503. Neither the stored
      * body nor the server message ever contains the API key, even when the
-     * server echoes it back.
+     * server echoes it back. Whenever the body's metadata is a JSON object,
+     * for every reason and also without one (D-12), its scrubbed copy, taken
+     * from the whole bounded body before the stored body is cut, becomes
+     * {@link DocQLException#metadata()}.
      */
     static DocQLException decodeError(int status, HttpHeaders headers, byte[] body, String key) {
         String reason = null;
         String serverMessage = null;
         String requestId = null;
+        JsonNode errorMetadata = null;
 
         JsonNode root = parseTree(body);
         if (root != null && root.isObject()) {
             JsonNode metadata = root.get("metadata");
             if (metadata != null && metadata.isObject()) {
+                errorMetadata = scrubNode(metadata, key);
                 JsonNode reasonNode = metadata.get("reason");
                 if (reasonNode != null && reasonNode.isTextual()) {
                     reason = sanitise(reasonNode.textValue(), key);
@@ -126,7 +135,36 @@ final class Decoder {
                 parseRetryAfter(headerValue(headers, "retry-after"), Instant.now()),
                 status == 429 || status == 503,
                 serverMessage,
-                scrubAndTruncate(body, key));
+                scrubAndTruncate(body, key),
+                null, null,
+                errorMetadata);
+    }
+
+    /**
+     * A copy of a parsed JSON value with the key replaced by {@code ***}
+     * (D-06): in every field name and text value of an object, in every item
+     * of an array, and in a text node. Numbers, booleans and null pass
+     * through unchanged. The depth is bounded by the parser's nesting limit.
+     */
+    static JsonNode scrubNode(JsonNode node, String key) {
+        if (node.isObject()) {
+            ObjectNode out = MAPPER.createObjectNode();
+            for (Map.Entry<String, JsonNode> field : node.properties()) {
+                out.set(scrub(field.getKey(), key), scrubNode(field.getValue(), key));
+            }
+            return out;
+        }
+        if (node.isArray()) {
+            ArrayNode out = MAPPER.createArrayNode();
+            for (JsonNode item : node) {
+                out.add(scrubNode(item, key));
+            }
+            return out;
+        }
+        if (node.isTextual()) {
+            return TextNode.valueOf(scrub(node.textValue(), key));
+        }
+        return node;
     }
 
     /**

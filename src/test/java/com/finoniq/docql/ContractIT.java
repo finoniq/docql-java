@@ -61,7 +61,7 @@ import static org.junit.jupiter.api.Assertions.fail;
  */
 class ContractIT {
 
-    /** How much of /__stub/sdk-cases or /__stub/job-cases may be read for the kit check. */
+    /** How much of each kit route (sdk, job and sheet cases) may be read for the kit check. */
     private static final int KIT_READ_CAP = 1 << 20;
 
     /** The plain client of the kit check; it never carries the API key. */
@@ -562,8 +562,10 @@ class ContractIT {
 
     /**
      * The kit gate (T-13-19), run once per JVM: for each kit file the stub
-     * serves — {@code GET /__stub/sdk-cases} for sdk-cases.json and
-     * {@code GET /__stub/job-cases} for job-cases.json — the sha256 of the
+     * serves — {@code GET /__stub/sdk-cases} for sdk-cases.json,
+     * {@code GET /__stub/job-cases} for job-cases.json and
+     * {@code GET /__stub/sdk-contract/sheet-cases.json} for sheet-cases.json
+     * (the stub has no dedicated sheet route) — the sha256 of the
      * served bytes (read capped at 1 MiB) must equal that file's entry in the
      * vendored manifest and the vendored file itself. Any mismatch — or a
      * non-200, over-cap body, or an unreachable stub — returns the failure
@@ -575,7 +577,11 @@ class ContractIT {
         if (sdk != null) {
             return sdk;
         }
-        return verifyKitFile(stubBase, "/__stub/job-cases", "job-cases.json");
+        String job = verifyKitFile(stubBase, "/__stub/job-cases", "job-cases.json");
+        if (job != null) {
+            return job;
+        }
+        return verifyKitFile(stubBase, "/__stub/sdk-contract/sheet-cases.json", "sheet-cases.json");
     }
 
     /** One served-manifest-vendored sha256 check; null when all three agree. */

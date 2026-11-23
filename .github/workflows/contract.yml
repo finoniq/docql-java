@@ -6,7 +6,9 @@
 # plus the README quickstart (contract-cases), and it is reusable so release.yml runs
 # it on a tag. Since v0.2 the same run also gates the kit v3 stub job cases
 # (JOB_CONTRACT_CASE_OK lines and JOB_CONTRACT_CASES_RAN against the jq count)
-# and runs the README jobs example after the quickstart.
+# and runs the README jobs example after the quickstart. Since v0.3 it also gates the
+# kit v5 sheet cases on both routes (SHEET_CONTRACT_CASE_OK lines and
+# SHEET_CONTRACT_CASES_RAN against the jq route total).
 name: contract
 
 on:
@@ -97,6 +99,25 @@ jobs:
           fi
           python3 -c "import sys, xml.etree.ElementTree as E; r = E.parse('target/failsafe-reports/TEST-com.finoniq.docql.JobContractIT.xml').getroot(); assert r.get('failures') == '0' and r.get('errors') == '0' and r.get('skipped') == '0' and int(r.get('tests')) > 0, 'the JobContractIT failsafe report must be clean'"
           echo "contract-cases: $ran/$WANT cases, $ran_jobs/$WANT_JOBS job cases, extras ok"
+      - name: every sheet case ran and passed (SSDK exact-count gate)
+        # Kit v5: SheetContractIT runs every sheet case once per route (sync and jobs)
+        # and prints SHEET_CONTRACT_CASE_OK <id> <route> per passed run, then
+        # SHEET_CONTRACT_CASES_RAN <n> once. A silently skipped run must fail: both
+        # counts must equal the kit's total of routes over all cases.
+        shell: bash
+        run: |
+          WANT_SHEETS=$(jq '[.cases[] | .routes | length] | add // 0' contract/sheet-cases.json)
+          ran=$(grep -cE '^SHEET_CONTRACT_CASE_OK ' "$RUNNER_TEMP/contract.log" || true)
+          echo "SHEET_CASES_RAN $ran (want $WANT_SHEETS)"
+          if [ "$WANT_SHEETS" -eq 0 ] || [ "$ran" -ne "$WANT_SHEETS" ]; then
+            echo "expected $WANT_SHEETS SHEET_CONTRACT_CASE_OK lines, saw $ran" >&2
+            exit 1
+          fi
+          if ! grep -qx "SHEET_CONTRACT_CASES_RAN $WANT_SHEETS" "$RUNNER_TEMP/contract.log"; then
+            echo "the exact-count gate line SHEET_CONTRACT_CASES_RAN $WANT_SHEETS is missing" >&2
+            exit 1
+          fi
+          python3 -c "import sys, xml.etree.ElementTree as E; r = E.parse('target/failsafe-reports/TEST-com.finoniq.docql.SheetContractIT.xml').getroot(); assert r.get('failures') == '0' and r.get('errors') == '0' and r.get('skipped') == '0' and int(r.get('tests')) > 0, 'the SheetContractIT failsafe report must be clean'"
       - name: README quickstart
         run: scripts/stub-up.sh --run scripts/run-readme.sh
       - name: README jobs example

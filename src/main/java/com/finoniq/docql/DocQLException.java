@@ -1,5 +1,9 @@
 package com.finoniq.docql;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -38,6 +42,12 @@ public class DocQLException extends RuntimeException {
     private final String jobId;
     /** The Idempotency-Key of the submit that failed; null otherwise. */
     private final String idempotencyKey;
+    /**
+     * The raw metadata object of the error body, scrubbed of the API key;
+     * an empty object when the body carried none. Declared as ObjectNode,
+     * which is Serializable, so the exception stays serializable.
+     */
+    private final ObjectNode metadata;
 
     DocQLException(int status, String reason, String requestId, Duration retryAfter,
             boolean retryable, String serverMessage, String body) {
@@ -46,6 +56,16 @@ public class DocQLException extends RuntimeException {
 
     DocQLException(int status, String reason, String requestId, Duration retryAfter,
             boolean retryable, String serverMessage, String body, String jobId, String idempotencyKey) {
+        this(status, reason, requestId, retryAfter, retryable, serverMessage, body, jobId, idempotencyKey, null);
+    }
+
+    /**
+     * The full constructor. A metadata that is null or not a JSON object is
+     * stored as an empty object, so {@link #metadata()} is never null.
+     */
+    DocQLException(int status, String reason, String requestId, Duration retryAfter,
+            boolean retryable, String serverMessage, String body, String jobId, String idempotencyKey,
+            JsonNode metadata) {
         super((String) null);
         this.status = status;
         this.reason = reason;
@@ -56,16 +76,19 @@ public class DocQLException extends RuntimeException {
         this.body = body;
         this.jobId = jobId;
         this.idempotencyKey = idempotencyKey;
+        this.metadata = metadata instanceof ObjectNode
+                ? (ObjectNode) metadata
+                : JsonNodeFactory.instance.objectNode();
     }
 
     /**
      * This error with the job context set: a job id, an idempotency key and
-     * the retryable flag (a failed job is never retryable). Everything else
-     * is kept.
+     * the retryable flag (a failed job is never retryable). Everything else,
+     * the metadata included, is kept.
      */
     DocQLException withJob(String newJobId, String newIdempotencyKey, boolean newRetryable) {
         return new DocQLException(status, reason, requestId, retryAfter, newRetryable, serverMessage, body,
-                newJobId, newIdempotencyKey);
+                newJobId, newIdempotencyKey, metadata);
     }
 
     /**
@@ -157,6 +180,28 @@ public class DocQLException extends RuntimeException {
      */
     public String idempotencyKey() {
         return idempotencyKey;
+    }
+
+    /**
+     * Returns the raw {@code metadata} object of the error body, so a refusal
+     * can be read without parsing {@link #body()}. For
+     * {@code spreadsheet_too_large} it holds the measured value under its
+     * axis key ({@code cells}, {@code runes}, {@code estimated_output_tokens}
+     * or {@code bytes}) and {@code limit}; for {@code too_many_pages} it
+     * holds {@code pages} and {@code limit}; {@code reason} and
+     * {@code request_id} sit next to them. Read a number with
+     * {@code metadata().path("limit").asLong()}: integers keep their exact
+     * value, and one above the long range stays a BigInteger node.
+     *
+     * <p>Never null: an empty object when the body was not JSON or carried no
+     * metadata object, and for a 2xx the SDK could not use. The API key is
+     * replaced with {@code ***} in every field name and text value. The
+     * metadata is never part of {@link #getMessage()}.
+     *
+     * @return the error body's metadata object, never null
+     */
+    public JsonNode metadata() {
+        return metadata;
     }
 
     @Override

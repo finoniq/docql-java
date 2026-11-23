@@ -24,6 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * The pinned {@code DocQL} list carries the two {@code queryDocumentAsync}
  * overloads (13-04, D-05) and the v0.2 job methods with the names the owner
  * froze at 26-01 (JSDK-01); Job is a final class, never a record (JSDK-03).
+ * {@code DocQLException.metadata()} is the v0.3 refusal metadata (SSDK-02).
  */
 class SurfaceTest {
 
@@ -146,7 +147,8 @@ class SurfaceTest {
         wantMethods.put("Reasons", Set.of());
         wantMethods.put("QueryResult", Set.of("data()", "requestId()", "pageCount()", "pagesOcr()", "metadata()"));
         wantMethods.put("DocQLException", Set.of("status()", "reason()", "requestId()", "retryAfter()",
-                "retryable()", "serverMessage()", "body()", "getMessage()", "jobId()", "idempotencyKey()"));
+                "retryable()", "serverMessage()", "body()", "getMessage()", "jobId()", "idempotencyKey()",
+                "metadata()"));
         wantMethods.put("DocQLConnectionException", Set.of("idempotencyKey()"));
         wantMethods.put("DocQLTimeoutException", Set.of());
         wantMethods.put("DocQLWaitTimeoutException", Set.of("jobId()"));

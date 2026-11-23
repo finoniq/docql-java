@@ -12,7 +12,8 @@ import java.util.Base64;
 
 /**
  * Loads the vendored contract kit ({@code contract/sdk-cases.json},
- * {@code contract/job-cases.json}, {@code contract/golden.json} and the
+ * {@code contract/job-cases.json}, {@code contract/sheet-cases.json},
+ * {@code contract/golden.json} and the
  * golden .bin files) relative to the project base directory, and builds the
  * file bytes of a case. Test-scope helper, never API. Files are always read
  * as bytes — never in the default charset, which the TIS-620 execution
@@ -31,6 +32,10 @@ final class Kit {
 
     static JsonNode jobCases() {
         return load("contract/job-cases.json");
+    }
+
+    static JsonNode sheetCases() {
+        return load("contract/sheet-cases.json");
     }
 
     static JsonNode golden() {
