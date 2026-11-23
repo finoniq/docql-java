@@ -8,7 +8,8 @@
 # (JOB_CONTRACT_CASE_OK lines and JOB_CONTRACT_CASES_RAN against the jq count)
 # and runs the README jobs example after the quickstart. Since v0.3 it also gates the
 # kit v5 sheet cases on both routes (SHEET_CONTRACT_CASE_OK lines and
-# SHEET_CONTRACT_CASES_RAN against the jq route total).
+# SHEET_CONTRACT_CASES_RAN against the jq route total) and runs the README
+# spreadsheet example after the jobs example.
 name: contract
 
 on:
@@ -122,3 +123,5 @@ jobs:
         run: scripts/stub-up.sh --run scripts/run-readme.sh
       - name: README jobs example
         run: scripts/stub-up.sh --run scripts/run-readme.sh --block jobs
+      - name: README spreadsheet example
+        run: scripts/stub-up.sh --run scripts/run-readme.sh --block spreadsheet

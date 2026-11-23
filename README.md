@@ -254,6 +254,82 @@ network.
 - There are no client-side type or size checks — the server is the
   authority. The API rejects files over 25 MiB, and a transport failure on a
   larger known-length upload carries a size hint in its message.
+- A CSV is recognised only by a file name that ends in `.csv`, in any letter
+  case (`sales.csv`, `SALES.CSV`). When you send `DocFile.bytes` or a
+  `DocFile.stream`, set the name with `QueryOptions.builder().filename(...)`
+  or the factory's `filename` argument. The name is sent exactly as given and
+  never trimmed, so `"a.csv "` with a trailing space is refused with
+  `unsupported_file_type`.
+
+## Spreadsheets
+
+`.xlsx`, `.ods` and `.csv` files are sent like any other file. A refused
+spreadsheet throws a `DocQLException` whose `metadata()` is the server's raw
+refusal object as a `JsonNode`. For `spreadsheet_too_large` it holds the
+measured value under its axis key (`cells`, `runes`, `estimated_output_tokens`
+or `bytes`), plus `limit`, `reason` and `request_id`; read the numbers with
+`path(...).asLong()`. Pick the axis by name, not by field position. Save the
+program below as `Spreadsheet.java` and run it like the quickstart:
+
+<!-- docql:spreadsheet:start -->
+```java
+// The README spreadsheet example, kept byte-identical with the README's fenced
+// block by scripts/check-quickstart.sh. Set DOCQL_API_KEY, point DOCQL_API_URL
+// at the API origin you were given, put a sales.csv in the working directory,
+// and run it with the JDK source launcher and the classpath of the quickstart:
+//
+//   java -cp <the quickstart's classpath> Spreadsheet.java
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Map;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.finoniq.docql.DocFile;
+import com.finoniq.docql.DocQL;
+import com.finoniq.docql.DocQLException;
+import com.finoniq.docql.Instruction;
+import com.finoniq.docql.QueryOptions;
+import com.finoniq.docql.QueryResult;
+import com.finoniq.docql.Reasons;
+
+public class Spreadsheet {
+
+    public static void main(String[] args) throws IOException {
+        DocQL client = DocQL.builder().build(); // reads DOCQL_API_KEY and DOCQL_API_URL
+        byte[] data = Files.readAllBytes(Path.of("sales.csv"));
+        try {
+            QueryResult res = client.queryDocument(
+                    DocFile.bytes(data, ""),
+                    Instruction.query("{ region total_sales }"),
+                    // a CSV is recognised by its .csv name, sent exactly as given
+                    QueryOptions.builder().filename("sales.csv").build());
+            if (res.pageCount() != null) {
+                System.out.println("pages: " + res.pageCount());
+            }
+        } catch (DocQLException e) {
+            if (!Reasons.SPREADSHEET_TOO_LARGE.equals(e.reason())) {
+                throw e;
+            }
+            JsonNode metadata = e.metadata();
+            long limit = metadata.path("limit").asLong();
+            // the axis is the one field that is not limit, reason or request_id
+            for (Map.Entry<String, JsonNode> field : metadata.properties()) {
+                String axis = field.getKey();
+                if (!axis.equals("limit") && !axis.equals("reason") && !axis.equals("request_id")) {
+                    System.out.println("too large: " + axis + "=" + field.getValue().asLong()
+                            + " limit=" + limit);
+                    break;
+                }
+            }
+        }
+    }
+}
+```
+<!-- docql:spreadsheet:end -->
+
+The same file is [`examples/Spreadsheet.java`](examples/Spreadsheet.java).
 
 ## Modes
 
@@ -271,7 +347,9 @@ multi-catch:
   SDK never follows, and a 2xx that is not a usable DocQL answer). It
   carries `status()`, `reason()` (null for a non-DocQL body), `requestId()`
   (null when absent), `retryAfter()` (`Duration`, null when absent),
-  `retryable()` and a key-scrubbed `body()` truncated to 2048 characters.
+  `retryable()`, a key-scrubbed `body()` truncated to 2048 characters and
+  `metadata()`, the key-scrubbed refusal metadata as a `JsonNode` (never
+  null; an empty object when the answer has none).
 - `DocQLConnectionException` — no usable answer arrived (connect, TLS,
   reset, broken pipe, short read). `DocQLTimeoutException` extends it and
   reports an expired deadline.

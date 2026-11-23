@@ -1,27 +1,30 @@
 #!/usr/bin/env bash
-# scripts/check-quickstart.sh — keep examples/Quickstart.java and
-# examples/Jobs.java telling the same story as the README's quickstart and
-# jobs blocks, and validate the install blocks that a downstream consumer
-# vendors from the release tag.
+# scripts/check-quickstart.sh — keep examples/Quickstart.java,
+# examples/Jobs.java and examples/Spreadsheet.java telling the same story as
+# the README's quickstart, jobs and spreadsheet blocks, and validate the
+# install blocks that a downstream consumer vendors from the release tag.
 #
 # Extracts the single fenced Java block between the docql:quickstart markers
 # of README.md and compares it byte for byte with examples/Quickstart.java,
-# does the same for the docql:jobs markers and examples/Jobs.java, then checks
+# does the same for the docql:jobs markers and examples/Jobs.java and for the
+# docql:spreadsheet markers and examples/Spreadsheet.java, then checks
 # that the docql:install-maven and docql:install-gradle blocks each appear
 # once and name the version the SDK's own VERSION constant carries. CI runs
 # this, so the README can never drift from the examples.
 #
 # Usage:
-#   scripts/check-quickstart.sh [--readme PATH] [--block quickstart|jobs]
+#   scripts/check-quickstart.sh [--readme PATH] [--block quickstart|jobs|spreadsheet]
 #
-# Without --block both example blocks are checked; --block checks only that
+# Without --block all three example blocks are checked; --block checks only that
 # one. The install blocks are checked on every run.
 #
-# Prints EXAMPLE_MATCHES_README for the quickstart and
-# JOBS_EXAMPLE_MATCHES_README for the jobs block (exit 0) on equality, plus
-# INSTALL_BLOCKS_OK when the install blocks are valid; EXAMPLE_DIFFERS /
-# JOBS_EXAMPLE_DIFFERS with a unified diff (exit 1) on drift, and
-# EXAMPLE_MISSING / JOBS_EXAMPLE_MISSING (exit 1) when the markers or fences
+# Prints EXAMPLE_MATCHES_README for the quickstart,
+# JOBS_EXAMPLE_MATCHES_README for the jobs block and
+# SPREADSHEET_EXAMPLE_MATCHES_README for the spreadsheet block (exit 0) on
+# equality, plus INSTALL_BLOCKS_OK when the install blocks are valid;
+# EXAMPLE_DIFFERS / JOBS_EXAMPLE_DIFFERS / SPREADSHEET_EXAMPLE_DIFFERS with a
+# unified diff (exit 1) on drift, and EXAMPLE_MISSING / JOBS_EXAMPLE_MISSING /
+# SPREADSHEET_EXAMPLE_MISSING (exit 1) when the markers or fences
 # are unusable or the example is absent or not ASCII. An unusable install
 # block prints EXAMPLE_MISSING too.
 
@@ -40,15 +43,15 @@ while [ "$#" -gt 0 ]; do
       shift 2
       ;;
     --block)
-      [ "$#" -ge 2 ] || { echo "--block needs quickstart or jobs" >&2; exit 2; }
+      [ "$#" -ge 2 ] || { echo "--block needs quickstart, jobs or spreadsheet" >&2; exit 2; }
       case "$2" in
-        quickstart|jobs) BLOCK=$2 ;;
-        *) echo "--block needs quickstart or jobs" >&2; exit 2 ;;
+        quickstart|jobs|spreadsheet) BLOCK=$2 ;;
+        *) echo "--block needs quickstart, jobs or spreadsheet" >&2; exit 2 ;;
       esac
       shift 2
       ;;
     *)
-      echo "usage: scripts/check-quickstart.sh [--readme PATH] [--block quickstart|jobs]" >&2
+      echo "usage: scripts/check-quickstart.sh [--readme PATH] [--block quickstart|jobs|spreadsheet]" >&2
       exit 2
       ;;
   esac
@@ -140,6 +143,9 @@ if [ -z "$BLOCK" ] || [ "$BLOCK" = "quickstart" ]; then
 fi
 if [ -z "$BLOCK" ] || [ "$BLOCK" = "jobs" ]; then
   check_block jobs Jobs.java "JOBS_"
+fi
+if [ -z "$BLOCK" ] || [ "$BLOCK" = "spreadsheet" ]; then
+  check_block spreadsheet Spreadsheet.java "SPREADSHEET_"
 fi
 
 # Install blocks: each pair once, start before end, carrying the current

@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# scripts/run-readme.sh — run a README example (the quickstart or the jobs
-# example) against the pinned stub.
+# scripts/run-readme.sh — run a README example (the quickstart, the jobs
+# example or the spreadsheet example) against the pinned stub.
 #
 # Extracts the single fenced Java block between the docql:quickstart markers
-# (or, with --block jobs, the docql:jobs markers) of README.md, writes it as
-# Quickstart.java (Jobs.java) into a fresh temporary directory
-# next to invoice.pdf (the golden kit's ascii-query document), and runs it
+# (or, with --block jobs / --block spreadsheet, the docql:jobs /
+# docql:spreadsheet markers) of README.md, writes it as Quickstart.java
+# (Jobs.java, Spreadsheet.java) into a fresh temporary directory of its own
+# next to invoice.pdf (the golden kit's ascii-query document) and sales.csv
+# (a copy of the kit's contract/sheets/plain.csv), and runs it
 # there with the JDK source launcher against the built jar plus its runtime
 # dependency classpath, with DOCQL_API_KEY and DOCQL_API_URL set explicitly
 # to the kit key and the stub URL — the developer's own environment is never
@@ -13,7 +15,7 @@
 #
 # Usage:
 #   scripts/stub-up.sh --run scripts/run-readme.sh [--readme PATH] [--classpath CP]
-#       [--block quickstart|jobs]
+#       [--block quickstart|jobs|spreadsheet]
 #
 # --block defaults to quickstart.
 #
@@ -21,9 +23,11 @@
 # plus the runtime scope built with the maven-dependency-plugin;
 # --classpath CP replaces it entirely.
 #
-# Prints README_QUICKSTART_OK (README_JOBS_OK for --block jobs) on success and
-# README_QUICKSTART_MISSING (README_JOBS_MISSING) when a marker or the fenced
-# block is unusable. Exits non-zero on any failure.
+# Prints README_QUICKSTART_OK (README_JOBS_OK for --block jobs,
+# README_SPREADSHEET_OK for --block spreadsheet) on success and
+# README_QUICKSTART_MISSING (README_JOBS_MISSING, README_SPREADSHEET_MISSING)
+# when a marker or the fenced block is unusable. Exits non-zero on any
+# failure.
 
 set -euo pipefail
 
@@ -46,15 +50,15 @@ while [ "$#" -gt 0 ]; do
       shift 2
       ;;
     --block)
-      [ "$#" -ge 2 ] || { echo "--block needs quickstart or jobs" >&2; exit 2; }
+      [ "$#" -ge 2 ] || { echo "--block needs quickstart, jobs or spreadsheet" >&2; exit 2; }
       case "$2" in
-        quickstart|jobs) BLOCK=$2 ;;
-        *) echo "--block needs quickstart or jobs" >&2; exit 2 ;;
+        quickstart|jobs|spreadsheet) BLOCK=$2 ;;
+        *) echo "--block needs quickstart, jobs or spreadsheet" >&2; exit 2 ;;
       esac
       shift 2
       ;;
     *)
-      echo "usage: scripts/run-readme.sh [--readme PATH] [--classpath CP] [--block quickstart|jobs]" >&2
+      echo "usage: scripts/run-readme.sh [--readme PATH] [--classpath CP] [--block quickstart|jobs|spreadsheet]" >&2
       exit 2
       ;;
   esac
@@ -76,6 +80,11 @@ case "$BLOCK" in
     FILE=Jobs.java
     TAG=README_JOBS
     LABEL="jobs example"
+    ;;
+  spreadsheet)
+    FILE=Spreadsheet.java
+    TAG=README_SPREADSHEET
+    LABEL="spreadsheet example"
     ;;
 esac
 START="<!-- docql:$BLOCK:start -->"
@@ -113,6 +122,8 @@ sed -n "$((open + 1)),$((close - 1))p" "$README" > "$TMP/$FILE"
 # invoice.pdf is the golden kit's ascii-query document; the key comes from
 # the vendored case list, so the run needs no real credential.
 jq -r '.cases[] | select(.id == "ascii-query") | .fileBase64' "$ROOT/contract/golden.json" | base64 -d > "$TMP/invoice.pdf"
+# sales.csv is the kit's plain CSV, for the spreadsheet example.
+cp "$ROOT/contract/sheets/plain.csv" "$TMP/sales.csv"
 API_KEY=$(jq -r '.keys.valid' "$ROOT/contract/sdk-cases.json")
 
 if [ -z "$CP" ]; then
