@@ -5,6 +5,40 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-11-23
+
+Java goes from 0.2.0 straight to 0.3.0, so the Python, Go and Java SDKs share
+the 0.3.0 version. There is no 0.2.1 for Java.
+
+### Added
+
+- `DocQLException.metadata()`: the server's raw refusal metadata object of an
+  error answer, as a `JsonNode`, with the API key scrubbed from field names
+  and text values. It is never null: an answer without a metadata object
+  gives an empty object. Numbers stay exact (`asLong()`, `bigIntegerValue()`).
+  It is filled on every route, the jobs calls and a failed job's `error()`
+  included, and survives Java serialization. `getMessage()` is unchanged.
+- Three `Reasons` constants: `SPREADSHEET_TOO_LARGE`, `DOCUMENT_TOO_COMPLEX`
+  and `TOO_MANY_PAGES` (25 in all).
+- A README spreadsheet example, also `examples/Spreadsheet.java`: it sends a
+  CSV by an explicit `.csv` name with `QueryOptions.builder().filename(...)`
+  and reads the axis, its value and the limit of a `spreadsheet_too_large`
+  refusal from `metadata()`.
+- README § Files states the CSV file-name rule: a CSV is recognised only by
+  a name ending in `.csv` in any letter case, `DocFile.bytes` and
+  `DocFile.stream` need the name, and the name is sent verbatim (`"a.csv "`
+  is refused with `unsupported_file_type`).
+
+### Changed
+
+- Contract kit v5 is vendored (stub pin `sha-1a3c3ce`); the contract suite
+  runs all 26 spreadsheet cases on the sync and the jobs route.
+- SECURITY.md names the 0.3.x line as the supported release line, and the
+  README install blocks, quickstart classpath and § Versioning name 0.3.
+- README § Errors lists `metadata()`.
+
+No breaking changes: code compiled against 0.2.0 links and runs unchanged.
+
 ## [0.2.0] - 2026-10-26
 
 ### Added
@@ -98,5 +132,6 @@ No breaking changes: code compiled against 0.1.0 links and runs unchanged.
   `DocQLTimeoutException` for an expired deadline. The API key never appears
   in any message, in `body()` or in `toString()`.
 
+[0.3.0]: https://github.com/finoniq/docql-java/tree/v0.3.0
 [0.2.0]: https://github.com/finoniq/docql-java/tree/v0.2.0
 [0.1.0]: https://github.com/finoniq/docql-java/tree/v0.1.0
