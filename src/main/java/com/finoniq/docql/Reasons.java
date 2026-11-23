@@ -2,8 +2,9 @@ package com.finoniq.docql;
 
 /**
  * The DocQL reasons (D-04): the SDK spelling of the stub REASON_TEXTS plus
- * the gateway ERROR_CLASSES and the job reasons: the non-null reasons of the
- * contract kit files sdk-cases.json and job-cases.json.
+ * the gateway ERROR_CLASSES, the job reasons and the spreadsheet reasons: the
+ * non-null reasons of the contract kit files sdk-cases.json, job-cases.json
+ * and sheet-cases.json.
  * {@link DocQLException#reason()} carries these values; classification is by
  * status, never by body shape. Constants can be added in a later release,
  * never removed or renamed.
@@ -78,4 +79,19 @@ public final class Reasons {
 
     /** The 503 reason for a job interrupted before it could complete. */
     public static final String JOB_INTERRUPTED = "job_interrupted";
+
+    /** The 422 reason for a document whose structure is too complex to read safely. */
+    public static final String DOCUMENT_TOO_COMPLEX = "document_too_complex";
+
+    /**
+     * The 422 reason for a spreadsheet over a size limit; the measured value
+     * and the limit are in {@link DocQLException#metadata()}.
+     */
+    public static final String SPREADSHEET_TOO_LARGE = "spreadsheet_too_large";
+
+    /**
+     * The 422 reason for a document with more pages than the limit; the pages
+     * and the limit are in {@link DocQLException#metadata()}.
+     */
+    public static final String TOO_MANY_PAGES = "too_many_pages";
 }
