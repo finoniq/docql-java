@@ -346,7 +346,9 @@ class WaitCasesTest {
         assertEquals(JOB_ID, e.jobId());
         assertEquals(Duration.ofSeconds(900), clock.elapsed());
         assertEquals(180, clock.sleeps.size());
-        assertEquals(180, server.requestCount(), "polls at 0, 5, ... 895 s; none at 900 s");
+        // Count the SDK's own sends: over 180 polls the JDK HttpClient can resend a GET on a new
+        // loopback connection below HttpClient.send, and the fake server counts that resend too.
+        assertEquals(180, http.sent.size(), "polls at 0, 5, ... 895 s; none at 900 s");
         assertEquals("wait for job " + JOB_ID + " timed out after 900 s; the job was not cancelled", e.getMessage());
         assertPollsOnlyBeforeTheDeadline(Jobs.DEFAULT_WAIT);
     }
