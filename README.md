@@ -202,6 +202,128 @@ The same file is [`examples/Jobs.java`](examples/Jobs.java).
 - `job.pagesDone()` stays 0 while DocQL runs OCR, so show progress as
   indeterminate while a running job reports 0 pages done.
 
+## Webhooks
+
+DocQL signs every webhook delivery with your endpoint's secret, following the
+open Standard Webhooks spec. Verify each delivery with `Webhooks.verify`
+before you trust it:
+
+- Read the raw request bytes before any JSON parsing, and pass the request
+  headers as they are: `exchange.getRequestHeaders()` from
+  `com.sun.net.httpserver`, or any other `Map<String, List<String>>`. A body
+  that was parsed and serialized again never verifies.
+- Pass the endpoint secret (`whsec_…`) in the list. During the 24 h rotation
+  overlap, pass both secrets: a delivery signed with either one verifies.
+- The helper does no replay detection. Store each `event.id()` and skip one
+  you have already seen: the id is the same across retries and resends.
+- `event.type()` is an open string. Compare it with
+  `WebhookEventTypes.JOB_SUCCEEDED`, `WebhookEventTypes.JOB_FAILED`,
+  `WebhookEventTypes.JOB_CANCELLED` or `WebhookEventTypes.WEBHOOK_TEST`, and
+  ignore a type you do not know. Compare `event.status()` with the
+  `JobStatus` constants (`JobStatus.SUCCEEDED` and the others).
+- `Webhooks.verify(body, headers, secrets, tolerance)` takes the clock
+  difference allowed between DocQL and your receiver, either way, as a
+  `Duration`; the three-argument overload allows 5 minutes.
+- A null, missing or malformed secret, or a tolerance that is null, zero or
+  negative, throws `IllegalArgumentException`. These are configuration
+  errors, not refused deliveries, and the message names the secret's
+  position, never its value.
+
+A refused delivery throws a `WebhookVerificationException`, whose `reason()`
+is one of:
+
+- `missing_header`: a `webhook-id`, `webhook-timestamp` or `webhook-signature`
+  header is absent, empty, or repeated with different values
+- `invalid_timestamp`: `webhook-timestamp` is not 1 to 12 ASCII digits
+- `invalid_signature_header`: `webhook-signature` has no well-formed v1 signature
+- `signature_mismatch`: a wrong secret or a changed body
+- `timestamp_too_old`: the signature is valid but older than the tolerance;
+  check your receiver's clock
+- `timestamp_too_new`: the timestamp is further in the future than the tolerance
+- `invalid_payload`: the signed body is not a DocQL webhook event
+
+A receiver built on the JDK's `com.sun.net.httpserver`. Save the program
+below as `Webhook.java`, set `DOCQL_WEBHOOK_SECRET`, and run it like the
+quickstart:
+
+<!-- docql:webhook:start -->
+```java
+// The README webhook example, kept byte-identical with the README's fenced
+// block by scripts/check-quickstart.sh. Set DOCQL_WEBHOOK_SECRET to your
+// endpoint's whsec_ secret from the console, optionally PORT (default 8000),
+// and run it with the JDK source launcher and the classpath of the quickstart:
+//
+//   java -cp <the quickstart's classpath> Webhook.java
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.InetSocketAddress;
+import java.util.List;
+
+import com.finoniq.docql.WebhookEvent;
+import com.finoniq.docql.WebhookVerificationException;
+import com.finoniq.docql.Webhooks;
+import com.sun.net.httpserver.HttpServer;
+
+public class Webhook {
+
+    private static final int MAX_BODY = 1 << 20; // 1 MiB
+
+    public static void main(String[] args) throws IOException {
+        String secret = System.getenv("DOCQL_WEBHOOK_SECRET"); // whsec_..., from the console
+        if (secret == null) {
+            System.err.println("set DOCQL_WEBHOOK_SECRET");
+            System.exit(1);
+        }
+        String port = System.getenv("PORT");
+        if (port == null || port.isEmpty()) {
+            port = "8000";
+        }
+
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", Integer.parseInt(port)), 0);
+        server.createContext("/", exchange -> {
+            try {
+                if (!exchange.getRequestMethod().equals("POST")) {
+                    exchange.sendResponseHeaders(405, -1);
+                    return;
+                }
+                // The raw bytes, before any JSON parsing; at most 1 MiB.
+                byte[] body;
+                try (InputStream in = exchange.getRequestBody()) {
+                    body = in.readNBytes(MAX_BODY + 1);
+                }
+                if (body.length > MAX_BODY) {
+                    exchange.sendResponseHeaders(413, -1);
+                    return;
+                }
+
+                WebhookEvent event;
+                try {
+                    event = Webhooks.verify(body, exchange.getRequestHeaders(), List.of(secret));
+                } catch (WebhookVerificationException e) {
+                    System.err.println("webhook refused: " + e.reason());
+                    exchange.sendResponseHeaders(400, -1);
+                    return;
+                } catch (IllegalArgumentException e) { // a malformed secret: fix the configuration
+                    System.err.println(e.getMessage());
+                    exchange.sendResponseHeaders(500, -1);
+                    return;
+                }
+
+                System.out.println("event " + event.type() + " " + event.id()); // store event.id(); skip one already seen
+                exchange.sendResponseHeaders(204, -1);
+            } finally {
+                exchange.close();
+            }
+        });
+        server.start();
+    }
+}
+```
+<!-- docql:webhook:end -->
+
+The same file is [`examples/Webhook.java`](examples/Webhook.java).
+
 ## Configuration
 
 `DocQL.builder()` carries the values below; a built client is immutable and
