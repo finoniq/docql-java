@@ -3,9 +3,10 @@
 #
 # Builds a throwaway Maven project and a throwaway Gradle 9 project that depend
 # on com.finoniq:docql:<version>, checks the resolved jar (bytecode major 61 and
-# Automatic-Module-Name: com.finoniq.docql), and runs the README quickstart and
-# the README jobs example on each project's resolved classpath against the
-# pinned stub. Proves D-15 step 1
+# Automatic-Module-Name: com.finoniq.docql), and runs the README quickstart,
+# the jobs example, the spreadsheet example and its refusal branch
+# (toolarge-cells-558-557.csv, WR-04) and the webhook receiver on each
+# project's resolved classpath against the pinned stub. Proves D-15 step 1
 # (resolve from a local install) and, after the owner presses Publish, the
 # Central release itself (D-16); verify-central.yml runs this script with
 # --source central.
@@ -167,6 +168,10 @@ echo "JAR_SHAPE_OK"
 echo "MAVEN_CONSUMER_OK"
 scripts/run-readme.sh --classpath "$CP_M"
 "$ROOT/scripts/run-readme.sh" --block jobs --classpath "$CP_M"
+"$ROOT/scripts/run-readme.sh" --block spreadsheet --classpath "$CP_M"
+"$ROOT/scripts/run-readme.sh" --block spreadsheet --sheet-name toolarge-cells-558-557.csv \
+  --expect-line "too large: cells=558 limit=557" --classpath "$CP_M"
+"$ROOT/scripts/run-readme.sh" --block webhook --classpath "$CP_M"
 
 # --- Gradle consumer --------------------------------------------------------
 CONS_G="$WORK/gradle-consumer"
@@ -209,5 +214,9 @@ fi
 echo "GRADLE_CONSUMER_OK"
 scripts/run-readme.sh --classpath "$CP_G"
 "$ROOT/scripts/run-readme.sh" --block jobs --classpath "$CP_G"
+"$ROOT/scripts/run-readme.sh" --block spreadsheet --classpath "$CP_G"
+"$ROOT/scripts/run-readme.sh" --block spreadsheet --sheet-name toolarge-cells-558-557.csv \
+  --expect-line "too large: cells=558 limit=557" --classpath "$CP_G"
+"$ROOT/scripts/run-readme.sh" --block webhook --classpath "$CP_G"
 
 echo "CONSUMERS_OK"

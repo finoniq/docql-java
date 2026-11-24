@@ -9,8 +9,8 @@
 # and runs the README jobs example after the quickstart. Since v0.3 it also gates the
 # kit v5 sheet cases on both routes (SHEET_CONTRACT_CASE_OK lines and
 # SHEET_CONTRACT_CASES_RAN against the jq route total) and runs the README
-# spreadsheet example after the jobs example. Since v0.4 it also runs the README
-# webhook receiver.
+# spreadsheet example after the jobs example. Since v0.4 it also runs the
+# spreadsheet refusal branch and the README webhook receiver.
 name: contract
 
 on:
@@ -126,6 +126,10 @@ jobs:
         run: scripts/stub-up.sh --run scripts/run-readme.sh --block jobs
       - name: README spreadsheet example
         run: scripts/stub-up.sh --run scripts/run-readme.sh --block spreadsheet
+      - name: README spreadsheet refusal example
+        # WR-04: the refusal branch of the same block, through a stub fixture name.
+        run: |
+          scripts/stub-up.sh --run scripts/run-readme.sh --block spreadsheet --sheet-name toolarge-cells-558-557.csv --expect-line "too large: cells=558 limit=557"
       - name: README webhook example
         # D-23: the receiver verifies a delivery signed at run time and refuses a tampered one.
         run: scripts/stub-up.sh --run scripts/run-readme.sh --block webhook

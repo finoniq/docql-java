@@ -15,6 +15,12 @@
 # to the kit key and the stub URL — the developer's own environment is never
 # read or printed. CI and the release verify job run this script unchanged.
 #
+# --sheet-name NAME (spreadsheet block only, WR-04) copies plain.csv as NAME
+# instead and points both "sales.csv" literals of the block at it, so a stub
+# fixture name such as toolarge-cells-558-557.csv runs the refusal branch; the
+# tag becomes README_SPREADSHEET_REFUSAL. --expect-line TEXT requires that
+# exact line in the example's output before the OK tag prints.
+#
 # The webhook block (D-23) is a receiver that serves until it is stopped. The
 # script starts it with the source launcher on a free loopback port
 # (18300..18399) with a whsec_ secret made for this run (never printed), POSTs
@@ -25,7 +31,7 @@
 #
 # Usage:
 #   scripts/stub-up.sh --run scripts/run-readme.sh [--readme PATH] [--classpath CP]
-#       [--block quickstart|jobs|spreadsheet|webhook]
+#       [--block quickstart|jobs|spreadsheet|webhook] [--sheet-name NAME] [--expect-line TEXT]
 #
 # --block defaults to quickstart.
 #
@@ -34,11 +40,12 @@
 # --classpath CP replaces it entirely.
 #
 # Prints README_QUICKSTART_OK (README_JOBS_OK for --block jobs,
-# README_SPREADSHEET_OK for --block spreadsheet, README_WEBHOOK_OK for --block
-# webhook) on success and README_QUICKSTART_MISSING (README_JOBS_MISSING,
+# README_SPREADSHEET_OK for --block spreadsheet, README_SPREADSHEET_REFUSAL_OK
+# with --sheet-name, README_WEBHOOK_OK for --block webhook) on success and README_QUICKSTART_MISSING (README_JOBS_MISSING,
 # README_SPREADSHEET_MISSING, README_WEBHOOK_MISSING) when a marker or the
 # fenced block is unusable; README_WEBHOOK_FAIL <problem> when the receiver
-# misbehaves. Exits non-zero on any failure.
+# misbehaves, and README_<BLOCK>_EXPECTED_LINE_MISSING <text> when
+# --expect-line does not match. Exits non-zero on any failure.
 
 set -euo pipefail
 
@@ -48,6 +55,9 @@ ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 README="$ROOT/README.md"
 CP=""
 BLOCK=quickstart
+SHEET_NAME=""
+EXPECT_LINE=""
+HAVE_EXPECT_LINE=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --readme)
@@ -68,12 +78,39 @@ while [ "$#" -gt 0 ]; do
       esac
       shift 2
       ;;
+    --sheet-name)
+      [ "$#" -ge 2 ] || { echo "--sheet-name needs a file name" >&2; exit 2; }
+      SHEET_NAME=$2
+      shift 2
+      ;;
+    --expect-line)
+      [ "$#" -ge 2 ] || { echo "--expect-line needs a line" >&2; exit 2; }
+      EXPECT_LINE=$2
+      HAVE_EXPECT_LINE=1
+      shift 2
+      ;;
     *)
-      echo "usage: scripts/run-readme.sh [--readme PATH] [--classpath CP] [--block quickstart|jobs|spreadsheet|webhook]" >&2
+      echo "usage: scripts/run-readme.sh [--readme PATH] [--classpath CP] [--block quickstart|jobs|spreadsheet|webhook] [--sheet-name NAME] [--expect-line TEXT]" >&2
       exit 2
       ;;
   esac
 done
+
+CSV_NAME=sales.csv
+if [ -n "$SHEET_NAME" ]; then
+  [ "$BLOCK" = spreadsheet ] || { echo "--sheet-name needs --block spreadsheet" >&2; exit 2; }
+  # A plain file name only: it is written into the temporary directory and
+  # pasted into a Java string literal.
+  if ! [[ "$SHEET_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+    echo "--sheet-name must be a plain file name ending in .csv" >&2
+    exit 2
+  fi
+  case "$(printf '%s' "$SHEET_NAME" | tr 'A-Z' 'a-z')" in
+    *.csv) ;;
+    *) echo "--sheet-name must be a plain file name ending in .csv" >&2; exit 2 ;;
+  esac
+  CSV_NAME=$SHEET_NAME
+fi
 
 STUB_URL=${DOCQL_STUB_URL:-}
 if [ -z "$STUB_URL" ]; then
@@ -103,6 +140,10 @@ case "$BLOCK" in
     LABEL="webhook example"
     ;;
 esac
+if [ -n "$SHEET_NAME" ]; then
+  TAG=README_SPREADSHEET_REFUSAL
+  LABEL="spreadsheet refusal example"
+fi
 START="<!-- docql:$BLOCK:start -->"
 END="<!-- docql:$BLOCK:end -->"
 
@@ -142,12 +183,21 @@ close=$(head -n 1 "$TMP/closes")
 [ "$((close - open))" -gt 1 ] || missing
 
 sed -n "$((open + 1)),$((close - 1))p" "$README" > "$TMP/$FILE"
+if [ -n "$SHEET_NAME" ]; then
+  if [ "$(grep -oF '"sales.csv"' "$TMP/$FILE" | wc -l)" -ne 2 ]; then
+    echo "${TAG}_UNEXPECTED_BLOCK: want exactly two \"sales.csv\" literals"
+    exit 1
+  fi
+  sed "s/\"sales\\.csv\"/\"$SHEET_NAME\"/g" "$TMP/$FILE" >"$TMP/$FILE.new"
+  mv "$TMP/$FILE.new" "$TMP/$FILE"
+fi
 
 # invoice.pdf is the golden kit's ascii-query document; the key comes from
 # the vendored case list, so the run needs no real credential.
 jq -r '.cases[] | select(.id == "ascii-query") | .fileBase64' "$ROOT/contract/golden.json" | base64 -d > "$TMP/invoice.pdf"
-# sales.csv is the kit's plain CSV, for the spreadsheet example.
-cp "$ROOT/contract/sheets/plain.csv" "$TMP/sales.csv"
+# sales.csv (or the --sheet-name file) is the kit's plain CSV, for the
+# spreadsheet example, copied into this run's own temporary directory.
+cp "$ROOT/contract/sheets/plain.csv" "$TMP/$CSV_NAME"
 API_KEY=$(jq -r '.keys.valid' "$ROOT/contract/sdk-cases.json")
 
 if [ -z "$CP" ]; then
@@ -261,5 +311,9 @@ else
 fi
 if [ -n "$out" ]; then
   printf '%s\n' "$out"
+fi
+if [ "$HAVE_EXPECT_LINE" -eq 1 ] && ! printf '%s\n' "$out" | grep -qxF -- "$EXPECT_LINE"; then
+  echo "${TAG}_EXPECTED_LINE_MISSING $EXPECT_LINE"
+  exit 1
 fi
 echo "${TAG}_OK"

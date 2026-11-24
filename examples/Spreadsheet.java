@@ -8,7 +8,7 @@
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Map;
+import java.util.List;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.finoniq.docql.DocFile;
@@ -38,16 +38,15 @@ public class Spreadsheet {
                 throw e;
             }
             JsonNode metadata = e.metadata();
-            long limit = metadata.path("limit").asLong();
-            // the axis is the one field that is not limit, reason or request_id
-            for (Map.Entry<String, JsonNode> field : metadata.properties()) {
-                String axis = field.getKey();
-                if (!axis.equals("limit") && !axis.equals("reason") && !axis.equals("request_id")) {
-                    System.out.println("too large: " + axis + "=" + field.getValue().asLong()
-                            + " limit=" + limit);
-                    break;
+            // pick the axis by name, never by field position
+            for (String axis : List.of("cells", "runes", "estimated_output_tokens", "bytes")) {
+                if (metadata.has(axis)) {
+                    System.out.println("too large: " + axis + "=" + metadata.path(axis).asLong()
+                            + " limit=" + metadata.path("limit").asLong());
+                    return;
                 }
             }
+            System.out.println(e.reason()); // no axis this example knows: the reason alone
         }
     }
 }
