@@ -97,6 +97,38 @@ class JobsTest {
         assertEquals("GET", server.requests().get(0).method());
     }
 
+    /**
+     * IN-04: a failed job's embedded error goes through Jobs.parseJob, and a
+     * key the server echoes in its metadata (as a field name and inside a text
+     * value) comes back as {@code ***}, never as the key.
+     */
+    @Test
+    void embeddedJobErrorScrubsEchoedKey() {
+        String echoKey = "dql_EmbeddedEchoKey4510ZqLr2Vn7TwXy_9aB3cD";
+        server.enqueue(200, "{\"job_id\":\"" + JOB_ID + "\",\"status\":\"failed\",\"metadata\":{},"
+                + "\"error\":{\"status_code\":422,\"error_info\":\"refused for " + echoKey + "\","
+                + "\"metadata\":{\"reason\":\"spreadsheet_too_large\",\"limit\":557,\"" + echoKey + "\":558,"
+                + "\"note\":\"key=" + echoKey + ";again=" + echoKey + "\",\"nested\":[{\"" + echoKey + "\":\""
+                + echoKey + "\"}]}}}");
+        DocQL client = DocQL.builder().apiKey(echoKey).apiUrl(server.url()).env(name -> null).build();
+
+        Job job = client.getJob(JOB_ID);
+
+        assertEquals(JobStatus.FAILED, job.status());
+        DocQLException error = job.error();
+        assertNotNull(error);
+        assertEquals("spreadsheet_too_large", error.reason());
+        JsonNode metadata = error.metadata();
+        assertEquals(558, metadata.path("***").asLong(), "the echoed key as a field name is ***");
+        assertFalse(metadata.has(echoKey));
+        assertEquals("key=***;again=***", metadata.path("note").asText(), "the echoed key inside a value is ***");
+        assertEquals("***", metadata.path("nested").path(0).path("***").asText());
+        assertEquals(557, metadata.path("limit").asLong());
+        assertFalse(metadata.toString().contains(echoKey), metadata.toString());
+        assertFalse(error.getMessage().contains(echoKey));
+        assertFalse(error.body().contains(echoKey));
+    }
+
     @Test
     void getJob404RaisesWithTheJobIdAfterOneRequest() {
         answer("job-404-not-found");
