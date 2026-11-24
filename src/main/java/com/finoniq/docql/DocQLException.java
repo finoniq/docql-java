@@ -191,17 +191,27 @@ public class DocQLException extends RuntimeException {
      * holds {@code pages} and {@code limit}; {@code reason} and
      * {@code request_id} sit next to them. Read a number with
      * {@code metadata().path("limit").asLong()}: integers keep their exact
-     * value, and one above the long range stays a BigInteger node.
+     * value, and one above the long range stays a BigInteger node, on which
+     * {@code asLong()} silently wraps. When a value may be that large, check
+     * {@code canConvertToLong()} first or read it with
+     * {@code bigIntegerValue()}.
+     *
+     * <p>The node is shared, not copied: the copy of this exception that a
+     * job method makes to add the job id returns the same node, so a change
+     * shows through both. Treat it as read-only.
      *
      * <p>Never null: an empty object when the body was not JSON or carried no
-     * metadata object, and for a 2xx the SDK could not use. The API key is
-     * replaced with {@code ***} in every field name and text value. The
-     * metadata is never part of {@link #getMessage()}.
+     * metadata object, for a 2xx the SDK could not use, and for an exception
+     * deserialized from a stream that an SDK before 0.3.0 wrote, which had no
+     * metadata. The API key is replaced with {@code ***} in every field name
+     * and text value. The metadata is never part of {@link #getMessage()}.
      *
      * @return the error body's metadata object, never null
      */
     public JsonNode metadata() {
-        return metadata;
+        // A stream written before 0.3.0 has no metadata field, and a final
+        // field cannot be set while deserializing (WR-02).
+        return metadata != null ? metadata : JsonNodeFactory.instance.objectNode();
     }
 
     @Override
