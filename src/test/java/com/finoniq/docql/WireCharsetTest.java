@@ -19,12 +19,12 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Base64;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 /**
@@ -36,13 +36,19 @@ import static org.junit.jupiter.api.Assertions.assertNull;
  * run's argLine, never another charset name, which the JDK would silently
  * ignore. Runs only in the dedicated {@code charset-tis620} surefire
  * execution.
+ *
+ * <p>The fake server records only the SDK's requests (its
+ * {@code User-Agent}, as in {@link FakeServer}) and each call must send
+ * exactly one: a local process that probes new loopback ports with
+ * {@code GET /} once overwrote the single captured request with its own empty
+ * body (OD-45.1-03).
  */
 class WireCharsetTest {
 
     private static final String GOLDEN_BOUNDARY = "docqlgoldenboundary0000000000001";
     private static final String WIRE_TEST_KEY = "wire-test-key";
 
-    private static final AtomicReference<Captured> captured = new AtomicReference<>();
+    private static final List<Captured> captured = new CopyOnWriteArrayList<>();
 
     private record Captured(byte[] body, Headers headers) {
     }
@@ -96,11 +102,11 @@ class WireCharsetTest {
                         file = DocFile.stream(new ByteArrayInputStream(fileBytes), fileBytes.length, filename);
                     }
 
-                    captured.set(null);
+                    captured.clear();
                     QueryResult result = client.queryDocument(file, instruction, options.build());
 
-                    Captured request = captured.get();
-                    assertNotNull(request, "the fake server received no request for " + id + "/" + kind);
+                    assertEquals(1, captured.size(), "the SDK sends exactly one request for " + id + "/" + kind);
+                    Captured request = captured.get(0);
                     assertArrayEquals(golden, request.body(), id + "/" + kind + " must be byte-exact");
 
                     Headers headers = request.headers();
@@ -126,11 +132,17 @@ class WireCharsetTest {
     }
 
     private static void handle(HttpExchange exchange) throws IOException {
+        if (!FakeServer.isSdkRequest(exchange)) {
+            exchange.getRequestBody().close();
+            exchange.sendResponseHeaders(404, -1);
+            exchange.close();
+            return;
+        }
         byte[] body;
         try (InputStream in = exchange.getRequestBody()) {
             body = in.readAllBytes();
         }
-        captured.set(new Captured(body, exchange.getRequestHeaders()));
+        captured.add(new Captured(body, exchange.getRequestHeaders()));
         byte[] response = ("{\"data\":{},\"metadata\":{\"request_id\":\"wire-test-request-id\","
                 + "\"page_count\":1,\"pages_ocr\":0}}").getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().set("Content-Type", "application/json");

@@ -26,6 +26,13 @@ import java.util.concurrent.atomic.AtomicLong;
  * raw body bytes — and counted. An optional hold delays every response; the
  * echo mode answers {@code data} with the request's own body-part JSON so a
  * result can be tied to its call. Not API; test scope only.
+ *
+ * <p>Only the SDK's own requests count: a request without the SDK's
+ * {@code User-Agent} ({@code docql-java/...}, set on every SDK request, D-13)
+ * gets a bare 404 and is neither recorded nor answered from the queue. A
+ * local process may probe any new loopback port (OD-45.1-03: on the gate
+ * host a Go client sends {@code GET /} to 127.0.0.1 and localhost), and such
+ * a stray must not change a count or take a canned answer.
  */
 final class FakeServer {
 
@@ -215,6 +222,12 @@ final class FakeServer {
     }
 
     private void handle(HttpExchange exchange) throws IOException {
+        if (!isSdkRequest(exchange)) {
+            exchange.getRequestBody().close();
+            exchange.sendResponseHeaders(404, -1);
+            exchange.close();
+            return;
+        }
         byte[] body;
         try (InputStream in = exchange.getRequestBody()) {
             body = in.readAllBytes();
@@ -257,6 +270,12 @@ final class FakeServer {
             }
         }
         exchange.close();
+    }
+
+    /** Whether the request carries the SDK's User-Agent, which every SDK request has (D-13). */
+    static boolean isSdkRequest(HttpExchange exchange) {
+        String agent = exchange.getRequestHeaders().getFirst("User-Agent");
+        return agent != null && agent.startsWith("docql-java/");
     }
 
     private static void sleepQuietly(long millis) {

@@ -249,6 +249,18 @@ class WaitCasesTest {
         }
     }
 
+    /**
+     * Exactly {@code expected} polls by the SDK's own count (OD-45.1-02), and
+     * at least as many at the fake server: below HttpClient.send the JDK may
+     * resend a GET on a new loopback connection, and the server counts that
+     * resend too, so an exact server-side count is flaky.
+     */
+    private void assertPolls(int expected, String message) {
+        assertEquals(expected, http.sent.size(), message);
+        assertTrue(server.requestCount() >= expected,
+                message + ": the fake server saw " + server.requestCount() + " requests");
+    }
+
     // --- the kit's waitCases, exactly (D-12) ---------------------------------------------------
 
     private static List<JsonNode> kitWaitCases() {
@@ -333,7 +345,7 @@ class WaitCasesTest {
             List<Long> want = new ArrayList<>();
             expect.path("sleepsSeconds").forEach(n -> want.add(n.asLong()));
             assertEquals(want, clock.sleepSeconds(), id + ": sleeps");
-            assertEquals(want.size() + 1, server.requestCount(), id + ": one poll per sleep plus the first");
+            assertPolls(want.size() + 1, id + ": one poll per sleep plus the first");
         }
         assertEquals(expect.path("deletes").asInt(), 0, id + ": the kit expects no DELETE");
         assertPollsOnlyBeforeTheDeadline(Jobs.DEFAULT_WAIT);
@@ -349,6 +361,8 @@ class WaitCasesTest {
         // Count the SDK's own sends: over 180 polls the JDK HttpClient can resend a GET on a new
         // loopback connection below HttpClient.send, and the fake server counts that resend too.
         assertEquals(180, http.sent.size(), "polls at 0, 5, ... 895 s; none at 900 s");
+        // IN-06: the fake server saw every poll too (at least; a resend adds one).
+        assertTrue(server.requestCount() >= 180, "the fake server saw " + server.requestCount() + " polls");
         assertEquals("wait for job " + JOB_ID + " timed out after 900 s; the job was not cancelled", e.getMessage());
         assertPollsOnlyBeforeTheDeadline(Jobs.DEFAULT_WAIT);
     }
@@ -359,7 +373,7 @@ class WaitCasesTest {
         WaitOptions options = WaitOptions.builder().timeout(Duration.ofSeconds(10)).build();
         assertThrows(DocQLWaitTimeoutException.class, () -> client().waitFor(JOB_ID, options));
         assertEquals(List.of(5L, 5L), clock.sleepSeconds());
-        assertEquals(2, server.requestCount());
+        assertPolls(2, "polls at 0 and 5 s; none at 10 s");
         assertPollsOnlyBeforeTheDeadline(Duration.ofSeconds(10));
     }
 
@@ -391,7 +405,7 @@ class WaitCasesTest {
                 () -> client().waitFor(JOB_ID, options));
         assertEquals(JOB_ID, e.jobId());
         assertEquals(List.of(2L, 2L), clock.sleepSeconds());
-        assertEquals(2, server.requestCount(), "no third poll at the 4 s deadline");
+        assertPolls(2, "no third poll at the 4 s deadline");
         assertPollsOnlyBeforeTheDeadline(Duration.ofSeconds(4));
     }
 
@@ -401,7 +415,7 @@ class WaitCasesTest {
         WaitOptions options = WaitOptions.builder().timeout(Duration.ofSeconds(3)).build();
         assertThrows(DocQLWaitTimeoutException.class, () -> client().waitFor(JOB_ID, options));
         assertEquals(List.of(2L), clock.sleepSeconds());
-        assertEquals(2, server.requestCount());
+        assertPolls(2, "polls at 0 and 2 s; none past the 3 s deadline");
     }
 
     @Test
@@ -410,7 +424,7 @@ class WaitCasesTest {
         WaitOptions options = WaitOptions.builder().timeout(Duration.ofSeconds(10)).build();
         assertThrows(DocQLWaitTimeoutException.class, () -> client().waitFor(JOB_ID, options));
         assertEquals(Collections.nCopies(10, 1L), clock.sleepSeconds());
-        assertEquals(10, server.requestCount(), "polls at 0..9 s; none at 10 s");
+        assertPolls(10, "polls at 0..9 s; none at 10 s");
         assertPollsOnlyBeforeTheDeadline(Duration.ofSeconds(10));
     }
 
@@ -490,7 +504,7 @@ class WaitCasesTest {
                 .enqueue(200, RUNNING).enqueue(503, BUSY).enqueue(200, SUCCEEDED);
         client().waitFor(JOB_ID);
         assertEquals(List.of(1L, 2L, 4L, 1L, 1L), clock.sleepSeconds());
-        assertEquals(6, server.requestCount());
+        assertPolls(6, "six polls");
     }
 
     @Test
@@ -519,8 +533,9 @@ class WaitCasesTest {
         Job job = client().waitFor(JOB_ID);
         assertEquals(JobStatus.SUCCEEDED, job.status());
         assertEquals(List.of(1L, 2L), clock.sleepSeconds());
+        // Three sends; the first two fail in the recording client and never reach the server.
         assertEquals(3, http.sent.size());
-        assertEquals(1, server.requestCount());
+        assertTrue(server.requestCount() >= 1, "the third send reached the fake server");
     }
 
     // --- outcomes (D-05) -----------------------------------------------------------------------
@@ -540,7 +555,7 @@ class WaitCasesTest {
         assertEquals(status, e.status());
         assertEquals(reason.isEmpty() ? null : reason, e.reason());
         assertEquals(JOB_ID, e.jobId());
-        assertEquals(1, server.requestCount());
+        assertPolls(1, "one GET, no retry");
         assertEquals(List.of(), clock.sleeps);
     }
 
@@ -553,7 +568,7 @@ class WaitCasesTest {
         assertEquals("upstream_unavailable", e.reason());
         assertFalse(e.retryable());
         assertEquals(JOB_ID, e.jobId());
-        assertEquals(1, server.requestCount());
+        assertPolls(1, "one GET, no retry");
     }
 
     @Test
@@ -572,7 +587,7 @@ class WaitCasesTest {
         DocQL client = client();
         assertEquals(JobStatus.SUCCEEDED, client.waitFor(JOB_ID).status());
         assertEquals(JobStatus.SUCCEEDED, client.waitFor(JOB_ID).status());
-        assertEquals(2, server.requestCount());
+        assertPolls(2, "one GET per waitFor");
         assertEquals(List.of(), clock.sleeps);
     }
 
@@ -602,7 +617,7 @@ class WaitCasesTest {
         } finally {
             Thread.interrupted();
         }
-        assertEquals(1, server.requestCount());
+        assertPolls(1, "one GET before the interrupted sleep");
         assertPollsOnlyBeforeTheDeadline(Jobs.DEFAULT_WAIT);
     }
 
@@ -656,7 +671,7 @@ class WaitCasesTest {
         assertThrows(NullPointerException.class, () -> WaitOptions.builder().timeout(null));
         assertThrows(NullPointerException.class, () -> WaitOptions.builder().pollInterval(null));
         assertThrows(NullPointerException.class, () -> client().waitFor(JOB_ID, null));
-        assertEquals(0, server.requestCount());
+        assertEquals(0, http.sent.size(), "nothing is sent for invalid options");
     }
 
     @Test
