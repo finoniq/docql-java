@@ -4,10 +4,12 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import org.junit.jupiter.api.Test;
 
+import java.io.Serializable;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.time.Instant;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
@@ -27,6 +29,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * overloads (13-04, D-05) and the v0.2 job methods with the names the owner
  * froze at 26-01 (JSDK-01); Job is a final class, never a record (JSDK-03).
  * {@code DocQLException.metadata()} is the v0.3 refusal metadata (SSDK-02).
+ * The v0.4 webhook helper (D-06, D-25, D-27): {@code Webhooks} with its two
+ * {@code verify} overloads, the final {@code WebhookEvent} with six accessors
+ * (never a record, never Serializable), {@code WebhookEventTypes} with no
+ * methods and the final {@code WebhookVerificationException} with
+ * {@code reason()}.
  */
 class SurfaceTest {
 
@@ -127,7 +134,8 @@ class SurfaceTest {
 
         assertEquals(Set.of("DocQL", "DocQLConnectionException", "DocQLException", "DocFile",
                 "DocQLTimeoutException", "DocQLWaitTimeoutException", "Instruction", "Job", "JobStatus", "Mode",
-                "QueryOptions", "QueryResult", "Reasons", "WaitOptions"),
+                "QueryOptions", "QueryResult", "Reasons", "WaitOptions", "WebhookEvent",
+                "WebhookVerificationException", "Webhooks"),
                 topLevel, "the public top-level types drifted");
         assertEquals(Set.of("DocQL$Builder", "QueryOptions$Builder", "WaitOptions$Builder"), nested,
                 "the public nested types drifted");
@@ -160,6 +168,9 @@ class SurfaceTest {
         wantMethods.put("JobStatus", Set.of());
         wantMethods.put("WaitOptions", Set.of("builder()"));
         wantMethods.put("WaitOptions$Builder", Set.of("timeout(Duration)", "pollInterval(Duration)", "build()"));
+        wantMethods.put("Webhooks", Set.of("verify(byte[],Map,List)", "verify(byte[],Map,List,Duration)"));
+        wantMethods.put("WebhookEvent", Set.of("id()", "type()", "timestamp()", "jobId()", "status()", "data()"));
+        wantMethods.put("WebhookVerificationException", Set.of("reason()"));
 
         for (Map.Entry<String, Set<String>> entry : wantMethods.entrySet()) {
             Class<?> cls = types.get(entry.getKey());
@@ -194,6 +205,24 @@ class SurfaceTest {
                 "JobStatus must be a final class of String constants, not an enum (D-09)");
         assertTrue(DocQLTimeoutException.class.isAssignableFrom(types.get("DocQLWaitTimeoutException")),
                 "DocQLWaitTimeoutException belongs to the timeout family (26-01 option recommended)");
+
+        Class<?> event = types.get("WebhookEvent");
+        assertTrue(!event.isRecord() && Modifier.isFinal(event.getModifiers())
+                && !Serializable.class.isAssignableFrom(event),
+                "WebhookEvent must be a final class, not a record and not Serializable (D-08, D-25)");
+        assertEquals(Instant.class, event.getMethod("timestamp").getReturnType(), "WebhookEvent.timestamp()");
+        assertEquals(JsonNode.class, event.getMethod("data").getReturnType(), "WebhookEvent.data()");
+        Class<?> failure = types.get("WebhookVerificationException");
+        assertTrue(Modifier.isFinal(failure.getModifiers()) && failure.getSuperclass() == RuntimeException.class,
+                "WebhookVerificationException must be a final direct RuntimeException (D-13)");
+        Class<?> webhooks = types.get("Webhooks");
+        assertTrue(Modifier.isFinal(webhooks.getModifiers()), "Webhooks must be a final holder class (D-06)");
+        for (Method method : webhooks.getDeclaredMethods()) {
+            if (Modifier.isPublic(method.getModifiers())) {
+                assertTrue(Modifier.isStatic(method.getModifiers()), "Webhooks." + method.getName() + " is static");
+                assertEquals(event, method.getReturnType(), "Webhooks.verify returns a WebhookEvent");
+            }
+        }
 
         for (Method method : DocQL.class.getDeclaredMethods()) {
             assertTrue(!method.getName().equals("wait"), "no DocQL method may be named wait (final on Object)");
