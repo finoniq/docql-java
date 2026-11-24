@@ -12,6 +12,9 @@ import com.fasterxml.jackson.databind.node.TextNode;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.http.HttpHeaders;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -268,6 +271,33 @@ final class Decoder {
         try {
             return MAPPER.readTree(body);
         } catch (IOException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Parses a signed webhook body (D-08, D-15) on the SDK's private mapper.
+     * The bytes are decoded as strict UTF-8 first, so the mapper never
+     * auto-detects UTF-16 or UTF-32 and invalid UTF-8 is never replaced.
+     * Returns null when the body is not UTF-8, not one JSON value, or breaks a
+     * stream-read constraint (nesting 500, number length 1000): request data
+     * must only ever give a webhook event or invalid_payload, so any parser
+     * failure is caught here.
+     */
+    static JsonNode parseWebhookBody(byte[] body) {
+        String text;
+        try {
+            text = StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(body))
+                    .toString();
+        } catch (CharacterCodingException e) {
+            return null;
+        }
+        try {
+            return MAPPER.readTree(text);
+        } catch (IOException | RuntimeException e) {
             return null;
         }
     }
