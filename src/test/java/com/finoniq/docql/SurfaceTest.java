@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import java.io.Serializable;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.time.Instant;
@@ -32,8 +33,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * The v0.4 webhook helper (D-06, D-25, D-27): {@code Webhooks} with its two
  * {@code verify} overloads, the final {@code WebhookEvent} with six accessors
  * (never a record, never Serializable), {@code WebhookEventTypes} with no
- * methods and the final {@code WebhookVerificationException} with
- * {@code reason()}.
+ * methods and exactly four String constants, and the final
+ * {@code WebhookVerificationException} with {@code reason()}.
  */
 class SurfaceTest {
 
@@ -135,7 +136,7 @@ class SurfaceTest {
         assertEquals(Set.of("DocQL", "DocQLConnectionException", "DocQLException", "DocFile",
                 "DocQLTimeoutException", "DocQLWaitTimeoutException", "Instruction", "Job", "JobStatus", "Mode",
                 "QueryOptions", "QueryResult", "Reasons", "WaitOptions", "WebhookEvent",
-                "WebhookVerificationException", "Webhooks"),
+                "WebhookEventTypes", "WebhookVerificationException", "Webhooks"),
                 topLevel, "the public top-level types drifted");
         assertEquals(Set.of("DocQL$Builder", "QueryOptions$Builder", "WaitOptions$Builder"), nested,
                 "the public nested types drifted");
@@ -170,6 +171,7 @@ class SurfaceTest {
         wantMethods.put("WaitOptions$Builder", Set.of("timeout(Duration)", "pollInterval(Duration)", "build()"));
         wantMethods.put("Webhooks", Set.of("verify(byte[],Map,List)", "verify(byte[],Map,List,Duration)"));
         wantMethods.put("WebhookEvent", Set.of("id()", "type()", "timestamp()", "jobId()", "status()", "data()"));
+        wantMethods.put("WebhookEventTypes", Set.of());
         wantMethods.put("WebhookVerificationException", Set.of("reason()"));
 
         for (Map.Entry<String, Set<String>> entry : wantMethods.entrySet()) {
@@ -215,6 +217,20 @@ class SurfaceTest {
         Class<?> failure = types.get("WebhookVerificationException");
         assertTrue(Modifier.isFinal(failure.getModifiers()) && failure.getSuperclass() == RuntimeException.class,
                 "WebhookVerificationException must be a final direct RuntimeException (D-13)");
+        Class<?> eventTypes = types.get("WebhookEventTypes");
+        assertTrue(Modifier.isFinal(eventTypes.getModifiers()) && !eventTypes.isEnum(),
+                "WebhookEventTypes must be a final class of String constants, not an enum (D-15, D-27)");
+        Map<String, Object> constants = new TreeMap<>();
+        for (Field field : eventTypes.getDeclaredFields()) {
+            if (Modifier.isPublic(field.getModifiers())) {
+                assertTrue(Modifier.isStatic(field.getModifiers()) && Modifier.isFinal(field.getModifiers())
+                        && field.getType() == String.class, "WebhookEventTypes." + field.getName());
+                constants.put(field.getName(), field.get(null));
+            }
+        }
+        assertEquals(Map.of("JOB_SUCCEEDED", "job.succeeded", "JOB_FAILED", "job.failed",
+                "JOB_CANCELLED", "job.cancelled", "WEBHOOK_TEST", "webhook.test"), constants,
+                "WebhookEventTypes holds exactly the four event types");
         Class<?> webhooks = types.get("Webhooks");
         assertTrue(Modifier.isFinal(webhooks.getModifiers()), "Webhooks must be a final holder class (D-06)");
         for (Method method : webhooks.getDeclaredMethods()) {

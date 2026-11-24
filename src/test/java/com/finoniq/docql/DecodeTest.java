@@ -638,6 +638,49 @@ class DecodeTest {
         assertEquals("job_1", job.jobId());
     }
 
+    /**
+     * D-33: while the contract kit moves to v6, a success may or may not
+     * carry {@code "screenshot": null} in its metadata. A sync answer and a
+     * succeeded job decode both shapes to the same typed fields, with no
+     * exception; only {@code metadata()} keeps the extra key.
+     */
+    @Test
+    void successWithAndWithoutScreenshot() {
+        String with = "{\"data\":{\"total\":\"42\",\"rows\":[1,2]},\"metadata\":{\"request_id\":\"req_d33\","
+                + "\"page_count\":2,\"pages_ocr\":1,\"screenshot\":null}}";
+        String without = with.replace(",\"screenshot\":null", "");
+        QueryResult a = parse(with);
+        QueryResult b = parse(without);
+        assertEquals(b.data(), a.data());
+        assertEquals("req_d33", a.requestId());
+        assertEquals(b.requestId(), a.requestId());
+        assertEquals(2, a.pageCount());
+        assertEquals(b.pageCount(), a.pageCount());
+        assertEquals(1, a.pagesOcr());
+        assertEquals(b.pagesOcr(), a.pagesOcr());
+        assertTrue(a.metadata().path("screenshot").isNull());
+        assertFalse(b.metadata().has("screenshot"));
+
+        String job = "{\"job_id\":\"job_d33\",\"status\":\"succeeded\",\"created_at\":\"2026-11-24T08:00:00Z\","
+                + "\"finished_at\":\"2026-11-24T08:00:05Z\",\"metadata\":{\"page_count\":2,\"pages_done\":2},"
+                + "\"result\":%s}";
+        Job ja = Jobs.parseJob(200, httpHeaders(Map.of()), String.format(job, with).getBytes(StandardCharsets.UTF_8),
+                TEST_KEY, null);
+        Job jb = Jobs.parseJob(200, httpHeaders(Map.of()),
+                String.format(job, without).getBytes(StandardCharsets.UTF_8), TEST_KEY, null);
+        assertEquals(JobStatus.SUCCEEDED, ja.status());
+        assertEquals(jb.status(), ja.status());
+        assertEquals(jb.pageCount(), ja.pageCount());
+        assertEquals(jb.finishedAt(), ja.finishedAt());
+        assertNotNull(ja.result());
+        assertEquals(b.data(), ja.result().data());
+        assertEquals(jb.result().data(), ja.result().data());
+        assertEquals(jb.result().requestId(), ja.result().requestId());
+        assertEquals(jb.result().pageCount(), ja.result().pageCount());
+        assertEquals(jb.result().pagesOcr(), ja.result().pagesOcr());
+        assertNull(ja.error());
+    }
+
     /** T-45-20: an ObjectOutputStream/ObjectInputStream round trip keeps the metadata equal. */
     @Test
     void metadataSurvivesJavaSerialization() throws Exception {
