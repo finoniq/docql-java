@@ -8,9 +8,9 @@ import java.time.Instant;
  * A verified DocQL webhook event, returned by {@link Webhooks#verify} (D-08,
  * D-25).
  *
- * <p>{@link #type()} is an open string, for example
- * {@code "job.succeeded"}: treat a value you do not know as an event type
- * this SDK does not know yet. {@link #status()} compares with the
+ * <p>{@link #type()} is an open string: compare it with the
+ * {@link WebhookEventTypes} constants and treat any other value as an event
+ * type this SDK does not know yet. {@link #status()} compares with the
  * {@link JobStatus} constants. {@link #data()} is the event's raw
  * {@code data} object, unknown keys included; a {@code webhook.test} event
  * has an empty one.
@@ -46,7 +46,7 @@ public final class WebhookEvent {
     }
 
     /**
-     * Returns the event type, for example {@code job.succeeded}.
+     * Returns the event type, for example {@link WebhookEventTypes#JOB_SUCCEEDED}.
      *
      * @return the non-empty event type, an open set
      */

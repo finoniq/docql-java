@@ -114,11 +114,21 @@ class WebhooksTest {
     }
 
     @Test
+    void eventTypeConstants() {
+        assertEquals("job.succeeded", WebhookEventTypes.JOB_SUCCEEDED);
+        assertEquals("job.failed", WebhookEventTypes.JOB_FAILED);
+        assertEquals("job.cancelled", WebhookEventTypes.JOB_CANCELLED);
+        assertEquals("webhook.test", WebhookEventTypes.WEBHOOK_TEST);
+        assertEquals(0, WebhookEventTypes.class.getConstructors().length, "no public constructor");
+        assertTrue(Modifier.isFinal(WebhookEventTypes.class.getModifiers()));
+    }
+
+    @Test
     void validDeliveryGivesTheEvent() {
         byte[] body = utf8(BODY);
         WebhookEvent event = verify(body, signed(body));
         assertEquals(ID, event.id());
-        assertEquals("job.succeeded", event.type());
+        assertEquals(WebhookEventTypes.JOB_SUCCEEDED, event.type());
         assertEquals(1_794_884_645_678L, event.timestamp().toEpochMilli());
         assertEquals("job_1", event.jobId());
         assertEquals(JobStatus.SUCCEEDED, event.status());
@@ -248,7 +258,7 @@ class WebhooksTest {
         byte[] body = utf8("{\"id\":\"evt_t\",\"type\":\"webhook.test\",\"timestamp\":\"2026-11-17T03:04:05Z\","
                 + "\"data\":{}}");
         WebhookEvent event = verify(body, signed(body));
-        assertEquals("webhook.test", event.type());
+        assertEquals(WebhookEventTypes.WEBHOOK_TEST, event.type());
         assertNull(event.jobId());
         assertNull(event.status());
         assertTrue(event.data().isObject() && event.data().isEmpty());
