@@ -6,7 +6,7 @@
 
   <groupId>com.finoniq</groupId>
   <artifactId>docql</artifactId>
-  <version>0.3.0</version>
+  <version>0.4.0</version>
   <packaging>jar</packaging>
 
   <name>DocQL Java SDK</name>

@@ -13,7 +13,7 @@ Maven:
 <dependency>
   <groupId>com.finoniq</groupId>
   <artifactId>docql</artifactId>
-  <version>0.3.0</version>
+  <version>0.4.0</version>
 </dependency>
 ```
 <!-- docql:install-maven:end -->
@@ -22,7 +22,7 @@ Gradle (Kotlin DSL):
 
 <!-- docql:install-gradle:start -->
 ```kotlin
-implementation("com.finoniq:docql:0.3.0")
+implementation("com.finoniq:docql:0.4.0")
 ```
 <!-- docql:install-gradle:end -->
 
@@ -43,7 +43,7 @@ Set `DOCQL_API_KEY`, and set `DOCQL_API_URL` to the API origin you were given â€
 // the API origin you were given, put an invoice.pdf in the working directory,
 // and run it with the JDK source launcher:
 //
-//   java -cp docql-0.3.0.jar:jackson-databind-2.21.7.jar:jackson-core-2.21.7.jar:jackson-annotations-2.21.jar Quickstart.java
+//   java -cp docql-0.4.0.jar:jackson-databind-2.21.7.jar:jackson-core-2.21.7.jar:jackson-annotations-2.21.jar Quickstart.java
 
 import java.nio.file.Path;
 
@@ -544,7 +544,7 @@ not processed.
 ## Versioning
 
 The SDK follows [Semantic Versioning](https://semver.org/). While the major
-version is 0, a minor release may change the API; pin a `0.3.x` version
+version is 0, a minor release may change the API; pin a `0.4.x` version
 until 1.0.
 Maven Central releases are permanent: a bad release is never replaced â€” it
 is fixed in a higher version.

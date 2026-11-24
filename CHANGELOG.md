@@ -5,6 +5,51 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-11-24
+
+### Added
+
+- `Webhooks.verify(byte[] body, Map<String, List<String>> headers,
+  List<String> secrets)` verifies a DocQL webhook delivery, signed as the open
+  Standard Webhooks spec describes, and returns a `WebhookEvent`. Pass the raw
+  request bytes before any JSON parsing, the request headers as they are and
+  the endpoint's secret, or several secrets while a rotation overlaps: a
+  delivery signed with any of them verifies. It needs no client and no API
+  key. The overload `verify(body, headers, secrets, Duration tolerance)` sets
+  the allowed clock difference either way (default 300 seconds).
+- `WebhookEvent`, a final class with `id()`, `type()`, `timestamp()` (an
+  `Instant`), `jobId()`, `status()` and `data()` (a `JsonNode`).
+- `WebhookEventTypes` constants `JOB_SUCCEEDED`, `JOB_FAILED`,
+  `JOB_CANCELLED` and `WEBHOOK_TEST`.
+- `WebhookVerificationException`, thrown for a refused delivery. Its
+  `reason()` is one of `missing_header`, `invalid_timestamp`,
+  `invalid_signature_header`, `signature_mismatch`, `timestamp_too_old`,
+  `timestamp_too_new` or `invalid_payload`. A null or malformed secret, an
+  empty secret list or a tolerance of zero or less is an
+  `IllegalArgumentException` whose message never shows the secret.
+- README § Webhooks, also `examples/Webhook.java`: a receiver built on
+  `com.sun.net.httpserver`, run against a delivery signed at run time.
+
+### Fixed
+
+- `DocQLException.metadata()` is never null, also for an exception serialized
+  by 0.2.0 and read by this version. 0.3.0 returned null in that case, which
+  its own entry below said could not happen; it now gives an empty object.
+
+### Changed
+
+- The README spreadsheet example, also `examples/Spreadsheet.java`, picks the
+  axis by name (`cells`, `runes`, `estimated_output_tokens` or `bytes`)
+  instead of taking the first metadata field that is not `limit`, `reason`
+  or `request_id`.
+- Contract kit v6 is vendored (stub pin `sha-05db33e`). Its success bodies no
+  longer carry `metadata.screenshot`, and the SDK reads a success with or
+  without that key the same way.
+- SECURITY.md names the 0.4.x line as the supported release line, and the
+  README install blocks, quickstart classpath and § Versioning name 0.4.
+
+No breaking changes: code compiled against 0.3.0 links and runs unchanged.
+
 ## [0.3.0] - 2026-11-23
 
 Java goes from 0.2.0 straight to 0.3.0, so the Python, Go and Java SDKs share
@@ -132,6 +177,7 @@ No breaking changes: code compiled against 0.1.0 links and runs unchanged.
   `DocQLTimeoutException` for an expired deadline. The API key never appears
   in any message, in `body()` or in `toString()`.
 
+[0.4.0]: https://github.com/finoniq/docql-java/tree/v0.4.0
 [0.3.0]: https://github.com/finoniq/docql-java/tree/v0.3.0
 [0.2.0]: https://github.com/finoniq/docql-java/tree/v0.2.0
 [0.1.0]: https://github.com/finoniq/docql-java/tree/v0.1.0

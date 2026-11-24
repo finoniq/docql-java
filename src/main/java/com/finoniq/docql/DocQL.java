@@ -43,7 +43,7 @@ import java.util.function.Supplier;
 public final class DocQL {
 
     /** The SDK version, reported in the User-Agent of every request. */
-    public static final String VERSION = "0.3.0";
+    public static final String VERSION = "0.4.0";
 
     static final String DEFAULT_API_URL = "https://api-docql.finoniq.com";
     static final String ENV_API_KEY = "DOCQL_API_KEY";
