@@ -5,6 +5,15 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- The README's webhook rotation guidance now says to remove the old secret
+  from the list when the overlap ends, and at once after a roll caused by a
+  leak, because a secret you still pass still verifies. This README change is
+  on `main` only: no release carries it, and 0.4.0 stays the current release.
+
 ## [0.4.0] - 2026-11-24
 
 ### Added
@@ -177,6 +186,7 @@ No breaking changes: code compiled against 0.1.0 links and runs unchanged.
   `DocQLTimeoutException` for an expired deadline. The API key never appears
   in any message, in `body()` or in `toString()`.
 
+[Unreleased]: https://github.com/finoniq/docql-java/compare/v0.4.0...HEAD
 [0.4.0]: https://github.com/finoniq/docql-java/tree/v0.4.0
 [0.3.0]: https://github.com/finoniq/docql-java/tree/v0.3.0
 [0.2.0]: https://github.com/finoniq/docql-java/tree/v0.2.0

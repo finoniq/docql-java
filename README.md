@@ -214,6 +214,9 @@ before you trust it:
   that was parsed and serialized again never verifies.
 - Pass the endpoint secret (`whsec_…`) in the list. During the 24 h rotation
   overlap, pass both secrets: a delivery signed with either one verifies.
+  Remove the old secret from the list when the overlap ends, and at once if
+  you rolled the secret because it leaked: a secret you still pass still
+  verifies.
 - The helper does no replay detection. Store each `event.id()` and skip one
   you have already seen: the id is the same across retries and resends.
 - `event.type()` is an open string. Compare it with
