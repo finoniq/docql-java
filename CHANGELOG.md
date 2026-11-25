@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the list when the overlap ends, and at once after a roll caused by a
   leak, because a secret you still pass still verifies. This README change is
   on `main` only: no release carries it, and 0.4.0 stays the current release.
+- Contract kit v7 is vendored (stub pin `sha-980220e`). Its two paid
+  workbook cases (`sheet-xlsx`, `sheet-ods`) now send the query
+  `{ items[] { item } }`; no served answer or SDK behavior changes. Like the
+  README change it is on `main` only.
 
 ## [0.4.0] - 2026-11-24
 
